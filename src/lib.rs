@@ -1,4 +1,4 @@
-//! RustSend Library
+//! NoirCast Library
 //!
 //! A high-performance packet crafting and sending library for network security tools.
 //! This module exposes the core functionality for use in benchmarks and external integrations.

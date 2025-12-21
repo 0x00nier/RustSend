@@ -299,7 +299,7 @@ pub async fn send_icmp_fallback(
     let mut payload = vec![8u8, 0u8, 0u8, 0u8]; // Type 8 (echo request), Code 0
     payload.extend_from_slice(&identifier.to_be_bytes());
     payload.extend_from_slice(&sequence.to_be_bytes());
-    payload.extend_from_slice(b"RustSend");
+    payload.extend_from_slice(b"NoirCast");
 
     // Try UDP port 7 (echo) - this rarely works but is the safest fallback
     let target_addr = SocketAddr::new(target, 7);

@@ -839,7 +839,7 @@ impl PacketSender {
     ) -> Result<bool> {
         // Run the blocking pnet operation in a spawn_blocking task
         let result = tokio::task::spawn_blocking(move || {
-            let payload = b"RustSend ICMP Probe";
+            let payload = b"NoirCast ICMP Probe";
             raw_socket::send_icmp_echo_raw(
                 target_ip,
                 icmp_id,

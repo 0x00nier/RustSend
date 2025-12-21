@@ -1,4 +1,4 @@
-//! TUI module - Terminal User Interface for RustSend
+//! TUI module - Terminal User Interface for NoirCast
 //!
 //! Provides the main event loop, terminal setup, and rendering
 //! using Ratatui and Crossterm.
@@ -53,7 +53,7 @@ pub async fn run(app: &mut App) -> Result<()> {
         app.log_error(format!("Failed to initialize packet sender: {}", e));
     }
 
-    app.log_info("RustSend TUI initialized. Press '?' for help.");
+    app.log_info("NoirCast TUI initialized. Press '?' for help.");
 
     // Create event handler
     let mut events = event::EventHandler::new(Duration::from_millis(100));

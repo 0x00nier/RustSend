@@ -1,21 +1,21 @@
 [package]
-name = "rustsend"
+name = "noircast"
 version = "0.1.0"
 edition = "2021"
-authors = ["RustSend Contributors"]
+authors = ["NoirCast Contributors"]
 description = "A powerful TUI-based packet crafting and sending tool with vim-like navigation"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/yourusername/rustsend"
+repository = "https://github.com/0x00nier/NoirCast"
 keywords = ["networking", "packet", "tui", "tcp", "security"]
 categories = ["command-line-utilities", "network-programming"]
 
 [[bin]]
-name = "rustsend"
+name = "noircast"
 path = "src/main.rs"
 
 [lib]
-name = "rustsend"
+name = "noircast"
 path = "src/lib.rs"
 
 [dependencies]

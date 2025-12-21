@@ -1,4 +1,4 @@
-//! UI module - Rendering and widgets for RustSend TUI
+//! UI module - Rendering and widgets for NoirCast TUI
 //!
 //! Provides all the visual components using Ratatui
 
@@ -97,7 +97,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let title = Paragraph::new(vec![
         Line::from(vec![
             Span::styled("◆ ", Style::default().fg(ACCENT)),
-            Span::styled("RustSend", Style::default().fg(FG_PRIMARY).bold()),
+            Span::styled("NoirCast", Style::default().fg(FG_PRIMARY).bold()),
             Span::styled(" v0.1", Style::default().fg(FG_DIM)),
         ]),
     ])

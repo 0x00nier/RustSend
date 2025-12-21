@@ -1110,6 +1110,45 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43794a0ace135be66a25d3ae77d41b91615fb68ae937f904090203e81f755b65"
 
 [[package]]
+name = "noircast"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "byteorder",
+ "chrono",
+ "clap",
+ "criterion",
+ "crossterm",
+ "futures",
+ "hex",
+ "http",
+ "httparse",
+ "libc",
+ "mockall",
+ "nix",
+ "parking_lot",
+ "pnet",
+ "pnet_datalink",
+ "pnet_packet",
+ "pnet_transport",
+ "rand",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "socket2 0.5.10",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+ "trust-dns-resolver",
+ "unicode-width",
+ "uuid",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1540,45 +1579,6 @@ dependencies = [
  "libc",
  "linux-raw-sys 0.11.0",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "rustsend"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "byteorder",
- "chrono",
- "clap",
- "criterion",
- "crossterm",
- "futures",
- "hex",
- "http",
- "httparse",
- "libc",
- "mockall",
- "nix",
- "parking_lot",
- "pnet",
- "pnet_datalink",
- "pnet_packet",
- "pnet_transport",
- "rand",
- "ratatui",
- "serde",
- "serde_json",
- "socket2 0.5.10",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "trust-dns-resolver",
- "unicode-width",
- "uuid",
 ]
 
 [[package]]

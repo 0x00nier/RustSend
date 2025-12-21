@@ -595,7 +595,7 @@ async fn handle_send(app: &mut App) {
                         // Build HTTP headers with Host
                         let mut headers = HashMap::new();
                         headers.insert("Host".to_string(), host.clone());
-                        headers.insert("User-Agent".to_string(), "RustSend/0.1.0".to_string());
+                        headers.insert("User-Agent".to_string(), "NoirCast/0.1.0".to_string());
                         headers.insert("Accept".to_string(), "*/*".to_string());
                         headers.insert("Connection".to_string(), "close".to_string());
 
@@ -1177,6 +1177,27 @@ async fn execute_command(app: &mut App, command: &str) {
             app.custom_payload = Some(payload.clone());
             app.log_info(format!("Built DNS {} query for '{}' ({} bytes)", type_name, domain, payload.len()));
         }
+        "dnsinfo" => {
+            // Show DNS question details using DnsQuestion struct
+            use crate::network::protocols::DnsQuestion;
+            let domain = if parts.len() > 1 { parts[1] } else { "example.com" };
+            let qtype = if parts.len() > 2 {
+                match parts[2].to_uppercase().as_str() {
+                    "A" => DnsType::A,
+                    "AAAA" => DnsType::Aaaa,
+                    "MX" => DnsType::Mx,
+                    "TXT" => DnsType::Txt,
+                    "NS" => DnsType::Ns,
+                    "CNAME" => DnsType::Cname,
+                    "SOA" => DnsType::Soa,
+                    "PTR" => DnsType::Ptr,
+                    "SRV" => DnsType::Srv,
+                    _ => DnsType::A,
+                }
+            } else { DnsType::A };
+            let question = DnsQuestion { name: domain.to_string(), qtype, qclass: 1 };
+            app.log_info(format!("DNS Question: name={} type={:?} class={}", question.name, question.qtype, question.qclass));
+        }
         "ntp" => {
             // Build NTP packet
             let ntp = NtpPacket::new();
@@ -1259,6 +1280,30 @@ async fn execute_command(app: &mut App, command: &str) {
                 }
             } else {
                 app.log_info("Usage: :service <port>");
+            }
+        }
+        "services" => {
+            // List all common services from COMMON_SERVICES
+            use crate::network::protocols::{COMMON_SERVICES, ServiceInfo};
+            let filter = if parts.len() > 1 { Some(parts[1].to_lowercase()) } else { None };
+            let matches: Vec<&ServiceInfo> = COMMON_SERVICES.iter()
+                .filter(|s| {
+                    filter.as_ref().map_or(true, |f| {
+                        s.name.to_lowercase().contains(f) ||
+                        s.description.to_lowercase().contains(f)
+                    })
+                })
+                .collect();
+            if matches.is_empty() {
+                app.log_info("No matching services found");
+            } else {
+                app.log_info(format!("Common services ({} total, {} shown):", COMMON_SERVICES.len(), matches.len()));
+                for s in matches.iter().take(20) {
+                    app.log_info(format!("  {:5} {:12} {:8} {}", s.port, s.name, s.protocol, s.description));
+                }
+                if matches.len() > 20 {
+                    app.log_info(format!("  ... and {} more (use :services <filter> to narrow)", matches.len() - 20));
+                }
             }
         }
         "rawsyn" => {
@@ -1648,6 +1693,172 @@ async fn execute_command(app: &mut App, command: &str) {
             } else {
                 app.log_info("Nothing to stop");
             }
+        }
+        "smb" => {
+            // Build SMB Negotiate request using SmbNegotiatePacket
+            use crate::network::protocols::SmbNegotiatePacket;
+            let smb = SmbNegotiatePacket::new();
+            let payload = smb.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built SMB Negotiate request ({} bytes) - supports NT LM 0.12, SMB 2.002, SMB 2.???", payload.len()));
+        }
+        "smb1" => {
+            // Build SMB1-only Negotiate request
+            use crate::network::protocols::SmbNegotiatePacket;
+            let smb = SmbNegotiatePacket::smb1_only();
+            let payload = smb.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built SMB1 Negotiate request ({} bytes) - NT LM 0.12 only", payload.len()));
+        }
+        "smb2" => {
+            // Build SMB2-only Negotiate request
+            use crate::network::protocols::SmbNegotiatePacket;
+            let smb = SmbNegotiatePacket::smb2_only();
+            let payload = smb.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built SMB2 Negotiate request ({} bytes) - SMB 2.x only", payload.len()));
+        }
+        "ldap" => {
+            // Build LDAP search request using LdapSearchRequest
+            use crate::network::protocols::{LdapSearchRequest, LdapScope};
+            let base_dn = if parts.len() > 1 { parts[1] } else { "" };
+            let ldap = LdapSearchRequest::new(base_dn)
+                .scope(LdapScope::WholeSubtree)
+                .filter("(objectClass=*)")
+                .attributes(vec!["cn", "objectClass"]);
+            let payload = ldap.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built LDAP Search request ({} bytes) base={}", payload.len(), base_dn));
+        }
+        "ldaprootdse" => {
+            // Build LDAP RootDSE query
+            use crate::network::protocols::LdapSearchRequest;
+            let ldap = LdapSearchRequest::rootdse_query();
+            let payload = ldap.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built LDAP RootDSE query ({} bytes)", payload.len()));
+        }
+        "ldapbase" => {
+            // Build LDAP search with BaseObject/SingleLevel scope
+            use crate::network::protocols::{LdapSearchRequest, LdapScope};
+            let base_dn = if parts.len() > 1 { parts[1] } else { "dc=example,dc=com" };
+            let scope_str = if parts.len() > 2 { parts[2] } else { "single" };
+            let scope = match scope_str.to_lowercase().as_str() {
+                "base" => LdapScope::BaseObject,
+                "single" | "one" => LdapScope::SingleLevel,
+                _ => LdapScope::WholeSubtree,
+            };
+            let msg_id: u32 = rand::random::<u16>() as u32;
+            let ldap = LdapSearchRequest::new(base_dn)
+                .message_id(msg_id)
+                .scope(scope)
+                .filter("(objectClass=*)");
+            let payload = ldap.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built LDAP Search ({} bytes) base={} scope={:?} msg_id={}",
+                payload.len(), base_dn, scope, msg_id));
+        }
+        "netbios" => {
+            // Build NetBIOS Name Service query using NetBiosNsPacket
+            use crate::network::protocols::NetBiosNsPacket;
+            let name = if parts.len() > 1 { parts[1] } else { "*" };
+            let netbios = NetBiosNsPacket::name_query(name);
+            let payload = netbios.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built NetBIOS Name Query ({} bytes) for '{}'", payload.len(), name));
+        }
+        "nbstat" => {
+            // Build NetBIOS Node Status query
+            use crate::network::protocols::NetBiosNsPacket;
+            let name = if parts.len() > 1 { parts[1] } else { "*" };
+            let netbios = NetBiosNsPacket::node_status_query(name);
+            let payload = netbios.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built NetBIOS Node Status query ({} bytes) for '{}'", payload.len(), name));
+        }
+        "dhcp" => {
+            // Build DHCP Discover packet using DhcpDiscoverPacket
+            use crate::network::protocols::DhcpDiscoverPacket;
+            // Use a random MAC address for discovery
+            let mac: [u8; 6] = [0x00, 0x11, 0x22, rand::random(), rand::random(), rand::random()];
+            let hostname = if parts.len() > 1 { Some(parts[1].to_string()) } else { None };
+            let mut dhcp = DhcpDiscoverPacket::new(mac);
+            if let Some(ref h) = hostname {
+                dhcp = dhcp.with_hostname(h);
+            }
+            let payload = dhcp.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built DHCP Discover ({} bytes) MAC={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}{}",
+                payload.len(), mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                hostname.map(|h| format!(" hostname={}", h)).unwrap_or_default()));
+        }
+        "kerberos" => {
+            // Build Kerberos AS-REQ using KerberosAsReq
+            use crate::network::protocols::KerberosAsReq;
+            if parts.len() < 3 {
+                app.log_info("Usage: :kerberos <realm> <username>");
+                return;
+            }
+            let realm = parts[1];
+            let username = parts[2];
+            let krb = KerberosAsReq::new(realm, username);
+            let payload = krb.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built Kerberos AS-REQ ({} bytes) realm={} user={}", payload.len(), realm, username));
+        }
+        "arp" => {
+            // Build ARP request using ArpPacket
+            use crate::network::protocols::ArpPacket;
+            // Parse target IP from args or use target host
+            let target_ip_str = if parts.len() > 1 { parts[1] } else { &app.target.host };
+            let target_ip: [u8; 4] = match target_ip_str.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => ip.octets(),
+                Err(_) => {
+                    app.log_error(format!("Invalid IPv4 address: {}", target_ip_str));
+                    return;
+                }
+            };
+            // Use a sample source MAC and IP (would need interface detection for real use)
+            let sender_mac: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+            let sender_ip: [u8; 4] = [192, 168, 1, 100];
+            let arp = ArpPacket::new_request(sender_mac, sender_ip, target_ip);
+            let payload = arp.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built ARP Request ({} bytes) for {}", payload.len(), target_ip_str));
+        }
+        "arpreply" => {
+            // Build ARP reply using ArpPacket::new_reply
+            use crate::network::protocols::ArpPacket;
+            let target_ip_str = if parts.len() > 1 { parts[1] } else { "192.168.1.1" };
+            let target_ip: [u8; 4] = match target_ip_str.parse::<std::net::Ipv4Addr>() {
+                Ok(ip) => ip.octets(),
+                Err(_) => {
+                    app.log_error(format!("Invalid IPv4 address: {}", target_ip_str));
+                    return;
+                }
+            };
+            let sender_mac: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+            let sender_ip: [u8; 4] = [192, 168, 1, 100];
+            let target_mac: [u8; 6] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+            let arp = ArpPacket::new_reply(sender_mac, sender_ip, target_mac, target_ip);
+            let payload = arp.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built ARP Reply ({} bytes) for {}", payload.len(), target_ip_str));
+        }
+        "dhcpxid" => {
+            // Build DHCP Discover with specific transaction ID
+            use crate::network::protocols::DhcpDiscoverPacket;
+            let xid: u32 = if parts.len() > 1 {
+                parts[1].parse().unwrap_or_else(|_| rand::random())
+            } else {
+                rand::random()
+            };
+            let mac: [u8; 6] = [0x00, 0x11, 0x22, rand::random(), rand::random(), rand::random()];
+            let dhcp = DhcpDiscoverPacket::new(mac)
+                .with_transaction_id(xid);
+            let payload = dhcp.build();
+            app.custom_payload = Some(payload.clone());
+            app.log_info(format!("Built DHCP Discover ({} bytes) XID=0x{:08X}", payload.len(), xid));
         }
         _ => {
             app.log_error(format!("Unknown command: {}", command));

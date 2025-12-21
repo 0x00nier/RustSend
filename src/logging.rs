@@ -1,4 +1,4 @@
-//! Logging configuration for RustSend
+//! Logging configuration for NoirCast
 //!
 //! Provides structured logging with file output and optional debug mode
 
@@ -19,7 +19,7 @@ pub fn init_logging(args: &Args) -> Result<()> {
     let log_level = if args.debug { "debug" } else { "info" };
 
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(format!("rustsend={}", log_level)));
+        .unwrap_or_else(|_| EnvFilter::new(format!("noircast={}", log_level)));
 
     // Create file appender
     let file_appender = tracing_appender::rolling::daily(

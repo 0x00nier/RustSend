@@ -1,11 +1,11 @@
-//! Command-line argument parsing for RustSend
+//! Command-line argument parsing for NoirCast
 
 use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "rustsend")]
-#[command(author = "RustSend Contributors")]
+#[command(name = "noircast")]
+#[command(author = "NoirCast Contributors")]
 #[command(version = "0.1.0")]
 #[command(about = "A powerful TUI-based packet crafting and sending tool", long_about = None)]
 pub struct Args {
@@ -14,7 +14,7 @@ pub struct Args {
     pub debug: bool,
 
     /// Log file path
-    #[arg(short, long, default_value = "rustsend.log")]
+    #[arg(short, long, default_value = "noircast.log")]
     pub log_file: PathBuf,
 
     /// Number of worker threads for packet sending
@@ -42,7 +42,7 @@ impl Default for Args {
     fn default() -> Self {
         Self {
             debug: false,
-            log_file: PathBuf::from("rustsend.log"),
+            log_file: PathBuf::from("noircast.log"),
             workers: num_cpus(),
             batch_size: 1000,
             timeout: 3000,

@@ -65,17 +65,17 @@ impl HttpRequest {
 
     /// Create a GET request
     pub fn get(path: &str) -> Self {
-        Self::new("GET", path).header("User-Agent", "RustSend/0.1.0")
+        Self::new("GET", path).header("User-Agent", "NoirCast/0.1.0")
     }
 
     /// Create a POST request
     pub fn post(path: &str) -> Self {
-        Self::new("POST", path).header("User-Agent", "RustSend/0.1.0")
+        Self::new("POST", path).header("User-Agent", "NoirCast/0.1.0")
     }
 
     /// Create a HEAD request
     pub fn head(path: &str) -> Self {
-        Self::new("HEAD", path).header("User-Agent", "RustSend/0.1.0")
+        Self::new("HEAD", path).header("User-Agent", "NoirCast/0.1.0")
     }
 }
 

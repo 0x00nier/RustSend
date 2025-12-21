@@ -1,10 +1,10 @@
-# RustSend
+# NoirCast
 
 A high-performance TUI-based packet crafting and network security tool written in Rust.
 
 ## Overview
 
-RustSend is a powerful command-line tool for network security professionals, penetration testers, and security researchers. It provides an intuitive vim-like interface for crafting and sending custom network packets with real-time response tracking.
+NoirCast is a powerful command-line tool for network security professionals, penetration testers, and security researchers. It provides an intuitive vim-like interface for crafting and sending custom network packets with real-time response tracking.
 
 ## Features
 
@@ -15,6 +15,14 @@ RustSend is a powerful command-line tool for network security professionals, pen
 - **HTTP/HTTPS**: Full HTTP request crafting with method, path, and header control
 - **DNS**: Query building with support for A, AAAA, MX, TXT, NS, CNAME record types
 - **NTP**: Network Time Protocol packet construction
+- **SNMP**: Simple Network Management Protocol queries
+- **SSDP**: Simple Service Discovery Protocol
+- **SMB**: Server Message Block negotiation
+- **LDAP**: Lightweight Directory Access Protocol searches
+- **NetBIOS**: NetBIOS Name Service queries
+- **DHCP**: DHCP Discover packets
+- **Kerberos**: Kerberos AS-REQ packets
+- **ARP**: Address Resolution Protocol packets
 
 ### User Interface
 - Vim-style navigation and keybindings
@@ -45,8 +53,8 @@ RustSend is a powerful command-line tool for network security professionals, pen
 ### Building from Source
 
 ```bash
-git clone https://github.com/0x00nier/RustSend.git
-cd RustSend
+git clone https://github.com/0x00nier/NoirCast.git
+cd NoirCast
 cargo build --release
 ```
 
@@ -54,14 +62,14 @@ cargo build --release
 
 ```bash
 # Standard mode (connect scans, UDP)
-./target/release/rustsend
+./target/release/noircast
 
 # With raw socket support (Linux)
-sudo ./target/release/rustsend
+sudo ./target/release/noircast
 
 # Or set capabilities once
-sudo setcap cap_net_raw+ep ./target/release/rustsend
-./target/release/rustsend
+sudo setcap cap_net_raw+ep ./target/release/noircast
+./target/release/noircast
 ```
 
 ## Usage
@@ -69,11 +77,11 @@ sudo setcap cap_net_raw+ep ./target/release/rustsend
 ### Command Line Options
 
 ```
-rustsend [OPTIONS]
+noircast [OPTIONS]
 
 Options:
   -d, --debug              Enable debug logging
-  -l, --log-file <PATH>    Log file path [default: rustsend.log]
+  -l, --log-file <PATH>    Log file path [default: noircast.log]
   -w, --workers <N>        Number of worker threads [default: CPU count]
   -b, --batch-size <N>     Batch size for concurrent sending [default: 1000]
   -t, --timeout <MS>       Connection timeout in milliseconds [default: 3000]
@@ -171,8 +179,20 @@ src/
     raw_socket.rs - Raw socket capability detection
     batch_sender.rs - High-performance batch sending
     packet.rs     - Packet construction (TCP, UDP, ICMP)
-    protocols.rs  - Protocol-specific builders (DNS, NTP, SNMP)
     http.rs       - HTTP request/response handling
+    protocols/
+      mod.rs      - Protocol module exports
+      dns.rs      - DNS query builder
+      ntp.rs      - NTP packet builder
+      snmp.rs     - SNMP request builder
+      ssdp.rs     - SSDP request builder
+      arp.rs      - ARP packet builder
+      netbios.rs  - NetBIOS Name Service builder
+      smb.rs      - SMB negotiate packet builder
+      ldap.rs     - LDAP search request builder
+      dhcp.rs     - DHCP discover packet builder
+      kerberos.rs - Kerberos AS-REQ builder
+      services.rs - Common service port mappings
 
   tui/
     mod.rs        - Terminal UI main loop
@@ -222,7 +242,7 @@ MIT License - See LICENSE file for details.
 
 ## Author
 
-RustSend Contributors
+NoirCast Contributors
 
 ---
 

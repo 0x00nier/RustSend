@@ -1,4 +1,4 @@
-//! Application state management for RustSend
+//! Application state management for NoirCast
 
 use crate::config::{Config, PacketTemplate, Protocol, ScanType, Target, TcpFlag};
 use crate::network::packet::{PacketResponse, PacketStats};

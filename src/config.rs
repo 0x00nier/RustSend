@@ -1,4 +1,4 @@
-//! Configuration management for RustSend
+//! Configuration management for NoirCast
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -521,26 +521,26 @@ impl PacketTemplate {
         match self {
             PacketTemplate::HttpGet => {
                 format!(
-                    "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: RustSend/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                    "GET / HTTP/1.1\r\nHost: {}\r\nUser-Agent: NoirCast/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",
                     host
                 ).into_bytes()
             }
             PacketTemplate::HttpHead => {
                 format!(
-                    "HEAD / HTTP/1.1\r\nHost: {}\r\nUser-Agent: RustSend/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+                    "HEAD / HTTP/1.1\r\nHost: {}\r\nUser-Agent: NoirCast/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",
                     host
                 ).into_bytes()
             }
             PacketTemplate::HttpPost => {
                 let body = "{}";
                 format!(
-                    "POST / HTTP/1.1\r\nHost: {}\r\nUser-Agent: RustSend/1.0\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    "POST / HTTP/1.1\r\nHost: {}\r\nUser-Agent: NoirCast/1.0\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     host, body.len(), body
                 ).into_bytes()
             }
             PacketTemplate::HttpOptions => {
                 format!(
-                    "OPTIONS * HTTP/1.1\r\nHost: {}\r\nUser-Agent: RustSend/1.0\r\nAccept: */*\r\n\r\n",
+                    "OPTIONS * HTTP/1.1\r\nHost: {}\r\nUser-Agent: NoirCast/1.0\r\nAccept: */*\r\n\r\n",
                     host
                 ).into_bytes()
             }

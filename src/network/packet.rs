@@ -683,7 +683,7 @@ impl PacketBuilder {
             .source_ip(source_ip)
             .dest_ip(dest_ip)
             .echo_request()
-            .payload(b"RustSend Ping".to_vec())
+            .payload(b"NoirCast Ping".to_vec())
             .build()
     }
 

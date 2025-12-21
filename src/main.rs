@@ -1,4 +1,4 @@
-//! RustSend - A powerful TUI-based packet crafting and sending tool
+//! NoirCast - A powerful TUI-based packet crafting and sending tool
 //!
 //! Features:
 //! - Customizable packet crafting (TCP, UDP, ICMP, etc.)
@@ -26,7 +26,7 @@ async fn main() -> Result<()> {
     // Initialize logging
     logging::init_logging(&args)?;
 
-    tracing::info!("Starting RustSend v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Starting NoirCast v{}", env!("CARGO_PKG_VERSION"));
     tracing::debug!("Debug mode: {}", args.debug);
     tracing::debug!("Workers: {}, Batch size: {}", args.workers, args.batch_size);
 
@@ -36,6 +36,6 @@ async fn main() -> Result<()> {
     // Run the TUI
     tui::run(&mut app).await?;
 
-    tracing::info!("RustSend shutdown complete");
+    tracing::info!("NoirCast shutdown complete");
     Ok(())
 }

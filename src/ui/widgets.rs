@@ -1,4 +1,4 @@
-//! Custom widgets for RustSend TUI
+//! Custom widgets for NoirCast TUI
 
 use ratatui::{
     layout::Rect,

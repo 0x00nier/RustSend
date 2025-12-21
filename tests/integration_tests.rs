@@ -1,4 +1,4 @@
-//! Integration tests for RustSend
+//! Integration tests for NoirCast
 //!
 //! These tests verify the overall behavior of the packet crafting
 //! and sending functionality.
