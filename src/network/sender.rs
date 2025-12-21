@@ -146,6 +146,16 @@ impl PacketSender {
         self.stats.read().await.clone()
     }
 
+    /// Get the stats Arc for sharing with other components
+    pub fn stats_arc(&self) -> Arc<RwLock<PacketStats>> {
+        self.stats.clone()
+    }
+
+    /// Set the stats Arc (for sharing with App)
+    pub fn set_stats(&mut self, stats: Arc<RwLock<PacketStats>>) {
+        self.stats = stats;
+    }
+
     /// Get number of active jobs
     pub fn active_jobs(&self) -> u64 {
         self.active_jobs.load(Ordering::Relaxed)

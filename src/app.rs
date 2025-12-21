@@ -891,11 +891,13 @@ impl App {
 
     /// Initialize the packet sender
     pub async fn init_sender(&mut self) -> Result<()> {
-        let sender = PacketSender::new(
+        let mut sender = PacketSender::new(
             self.args.workers,
             self.args.batch_size,
             self.args.timeout,
         ).await?;
+        // Share the stats Arc so sender updates are visible in the UI
+        sender.set_stats(self.stats.clone());
         self.packet_sender = Some(Arc::new(sender));
         self.log_info("Packet sender initialized");
         Ok(())
