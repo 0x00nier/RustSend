@@ -170,6 +170,16 @@ fn get_help_entries() -> Vec<HelpEntry> {
             category: HelpCategory::Actions,
         },
         HelpEntry {
+            key: "e",
+            description: "Packet editor",
+            category: HelpCategory::Actions,
+        },
+        HelpEntry {
+            key: "P",
+            description: "Protocol picker",
+            category: HelpCategory::Actions,
+        },
+        HelpEntry {
             key: "q",
             description: "Quit",
             category: HelpCategory::Actions,
@@ -316,6 +326,41 @@ fn get_help_entries() -> Vec<HelpEntry> {
         HelpEntry {
             key: ":debug",
             description: "Toggle debug mode",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":packet",
+            description: "Open packet editor",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":payload <hex>",
+            description: "Set/show payload",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":srcport <n>",
+            description: "Set source port",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":dstport <n>",
+            description: "Set dest port",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":ttl <n>",
+            description: "Set TTL (0-255)",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":seq <n>",
+            description: "Set sequence number",
+            category: HelpCategory::Commands,
+        },
+        HelpEntry {
+            key: ":randseq",
+            description: "Randomize seq number",
             category: HelpCategory::Commands,
         },
     ]

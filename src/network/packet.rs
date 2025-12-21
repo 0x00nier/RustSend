@@ -13,20 +13,36 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum PacketError {
-    #[error("Invalid packet size: expected at least {expected}, got {actual}")]
+    #[error("Invalid packet size: expected at least {expected} bytes, got {actual}")]
     InvalidSize { expected: usize, actual: usize },
 
-    #[error("Failed to build packet: {0}")]
-    BuildError(String),
+    #[error("Failed to build {packet_type} packet: {details}")]
+    BuildError { packet_type: String, details: String },
 
-    #[error("Invalid IP address: {0}")]
-    InvalidAddress(String),
+    #[error("Invalid IP address '{address}': {reason}")]
+    InvalidAddress { address: String, reason: String },
 
     #[error("Protocol not supported: {0}")]
     UnsupportedProtocol(String),
 
-    #[error("Checksum calculation failed")]
-    ChecksumError,
+    #[error("Checksum calculation failed for {packet_type}")]
+    ChecksumError { packet_type: String },
+
+    #[error("Buffer too small: need {needed} bytes, have {available}")]
+    BufferTooSmall { needed: usize, available: usize },
+}
+
+impl PacketError {
+    pub fn build_error(packet_type: impl Into<String>, details: impl Into<String>) -> Self {
+        PacketError::BuildError {
+            packet_type: packet_type.into(),
+            details: details.into()
+        }
+    }
+
+    pub fn buffer_too_small(needed: usize, available: usize) -> Self {
+        PacketError::BufferTooSmall { needed, available }
+    }
 }
 
 /// Statistics for packet operations
@@ -264,7 +280,7 @@ impl TcpPacketBuilder {
         // Build IP header
         {
             let mut ip_packet = MutableIpv4Packet::new(&mut buffer[..])
-                .ok_or_else(|| PacketError::BuildError("Failed to create IP packet".into()))?;
+                .ok_or_else(|| PacketError::build_error("IPv4", "Buffer too small for IP header"))?;
 
             ip_packet.set_version(4);
             ip_packet.set_header_length(5);
@@ -286,7 +302,7 @@ impl TcpPacketBuilder {
         // Build TCP header
         {
             let mut tcp_packet = MutableTcpPacket::new(&mut buffer[20..])
-                .ok_or_else(|| PacketError::BuildError("Failed to create TCP packet".into()))?;
+                .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP header"))?;
 
             tcp_packet.set_source(self.source_port);
             tcp_packet.set_destination(self.dest_port);
@@ -310,9 +326,21 @@ impl TcpPacketBuilder {
     pub fn build_segment(&self) -> Result<Vec<u8>, PacketError> {
         let tcp_len = 20 + self.payload.len();
         let mut buffer = vec![0u8; tcp_len];
+        self.build_segment_into(&mut buffer)?;
+        Ok(buffer)
+    }
 
-        let mut tcp_packet = MutableTcpPacket::new(&mut buffer)
-            .ok_or_else(|| PacketError::BuildError("Failed to create TCP packet".into()))?;
+    /// Build TCP segment into an existing buffer
+    /// Returns an error if the buffer is too small
+    pub fn build_segment_into(&self, buffer: &mut [u8]) -> Result<usize, PacketError> {
+        let tcp_len = 20 + self.payload.len();
+
+        if buffer.len() < tcp_len {
+            return Err(PacketError::buffer_too_small(tcp_len, buffer.len()));
+        }
+
+        let mut tcp_packet = MutableTcpPacket::new(buffer)
+            .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP header"))?;
 
         tcp_packet.set_source(self.source_port);
         tcp_packet.set_destination(self.dest_port);
@@ -328,7 +356,7 @@ impl TcpPacketBuilder {
         let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &self.source_ip, &self.dest_ip);
         tcp_packet.set_checksum(checksum);
 
-        Ok(buffer)
+        Ok(tcp_len)
     }
 }
 
@@ -401,7 +429,7 @@ impl UdpPacketBuilder {
         // Build IP header
         {
             let mut ip_packet = MutableIpv4Packet::new(&mut buffer[..])
-                .ok_or_else(|| PacketError::BuildError("Failed to create IP packet".into()))?;
+                .ok_or_else(|| PacketError::build_error("IPv4", "Buffer too small for IP header"))?;
 
             ip_packet.set_version(4);
             ip_packet.set_header_length(5);
@@ -423,7 +451,7 @@ impl UdpPacketBuilder {
         // Build UDP header
         {
             let mut udp_packet = MutableUdpPacket::new(&mut buffer[20..])
-                .ok_or_else(|| PacketError::BuildError("Failed to create UDP packet".into()))?;
+                .ok_or_else(|| PacketError::build_error("UDP", "Buffer too small for UDP header"))?;
 
             udp_packet.set_source(self.source_port);
             udp_packet.set_destination(self.dest_port);
@@ -533,7 +561,7 @@ impl IcmpPacketBuilder {
         // Build IP header
         {
             let mut ip_packet = MutableIpv4Packet::new(&mut buffer[..])
-                .ok_or_else(|| PacketError::BuildError("Failed to create IP packet".into()))?;
+                .ok_or_else(|| PacketError::build_error("IPv4", "Buffer too small for IP header"))?;
 
             ip_packet.set_version(4);
             ip_packet.set_header_length(5);
@@ -829,5 +857,34 @@ mod tests {
 
         let empty_flags: Vec<TcpFlag> = vec![];
         assert_eq!(format_flags(&empty_flags), "NONE");
+    }
+
+    #[test]
+    fn test_build_segment_into_buffer_too_small() {
+        let builder = TcpPacketBuilder::new()
+            .source_ip(Ipv4Addr::new(192, 168, 1, 1))
+            .dest_ip(Ipv4Addr::new(192, 168, 1, 2))
+            .source_port(12345)
+            .dest_port(80)
+            .syn();
+
+        // Buffer too small (needs at least 20 bytes for TCP header)
+        let mut small_buffer = [0u8; 10];
+        let result = builder.build_segment_into(&mut small_buffer);
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            PacketError::BufferTooSmall { needed, available } => {
+                assert_eq!(needed, 20);
+                assert_eq!(available, 10);
+            }
+            _ => panic!("Expected BufferTooSmall error"),
+        }
+
+        // Adequate buffer works fine
+        let mut adequate_buffer = [0u8; 40];
+        let result = builder.build_segment_into(&mut adequate_buffer);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 20);
     }
 }

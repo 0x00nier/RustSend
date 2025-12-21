@@ -165,6 +165,14 @@ pub enum Protocol {
     Https,
     Dns,
     Ntp,
+    Snmp,
+    Ssdp,
+    Smb,
+    Ldap,
+    NetBios,
+    Dhcp,
+    Kerberos,
+    Arp,
     Raw,
 }
 
@@ -178,6 +186,14 @@ impl std::fmt::Display for Protocol {
             Protocol::Https => write!(f, "HTTPS"),
             Protocol::Dns => write!(f, "DNS"),
             Protocol::Ntp => write!(f, "NTP"),
+            Protocol::Snmp => write!(f, "SNMP"),
+            Protocol::Ssdp => write!(f, "SSDP"),
+            Protocol::Smb => write!(f, "SMB"),
+            Protocol::Ldap => write!(f, "LDAP"),
+            Protocol::NetBios => write!(f, "NetBIOS"),
+            Protocol::Dhcp => write!(f, "DHCP"),
+            Protocol::Kerberos => write!(f, "Kerberos"),
+            Protocol::Arp => write!(f, "ARP"),
             Protocol::Raw => write!(f, "RAW"),
         }
     }

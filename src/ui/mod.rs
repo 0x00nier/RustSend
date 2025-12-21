@@ -3,6 +3,8 @@
 //! Provides all the visual components using Ratatui
 
 mod help;
+mod packet_editor;
+mod protocol_picker;
 pub mod widgets;
 
 use crate::app::{ActivePane, App, HttpDirection, InputMode, LogLevel, PacketDirection};
@@ -80,6 +82,16 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.input_mode == InputMode::Search {
         render_search_line(frame, app);
     }
+
+    // Render packet editor popup if active
+    if app.show_packet_editor {
+        packet_editor::render_packet_editor(frame, app);
+    }
+
+    // Render protocol picker popup if active
+    if app.show_protocol_picker {
+        protocol_picker::render_protocol_picker(frame, app);
+    }
 }
 
 /// Render the header with title and tabs
@@ -111,7 +123,10 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(title, header_chunks[0]);
 
     // Protocol tabs
-    let protocols: Vec<&str> = vec!["TCP", "UDP", "ICMP", "HTTP", "HTTPS", "DNS", "NTP"];
+    let protocols: Vec<&str> = vec![
+        "TCP", "UDP", "ICMP", "HTTP", "HTTPS", "DNS", "NTP",
+        "SNMP", "SSDP", "SMB", "LDAP", "NetBIOS", "DHCP", "Kerberos", "ARP"
+    ];
     let selected_idx = match app.selected_protocol {
         Protocol::Tcp => 0,
         Protocol::Udp => 1,
@@ -120,6 +135,14 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         Protocol::Https => 4,
         Protocol::Dns => 5,
         Protocol::Ntp => 6,
+        Protocol::Snmp => 7,
+        Protocol::Ssdp => 8,
+        Protocol::Smb => 9,
+        Protocol::Ldap => 10,
+        Protocol::NetBios => 11,
+        Protocol::Dhcp => 12,
+        Protocol::Kerberos => 13,
+        Protocol::Arp => 14,
         Protocol::Raw => 0,
     };
 
@@ -220,6 +243,14 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
         Protocol::Http | Protocol::Https => " HTTP Config ",
         Protocol::Dns => " DNS Config ",
         Protocol::Ntp => " NTP Config ",
+        Protocol::Snmp => " SNMP Config ",
+        Protocol::Ssdp => " SSDP Config ",
+        Protocol::Smb => " SMB Config ",
+        Protocol::Ldap => " LDAP Config ",
+        Protocol::NetBios => " NetBIOS Config ",
+        Protocol::Dhcp => " DHCP Config ",
+        Protocol::Kerberos => " Kerberos Config ",
+        Protocol::Arp => " ARP Config ",
         Protocol::Raw => " Raw Config ",
     };
 
@@ -406,6 +437,120 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             ));
             frame.render_widget(list, inner);
         }
+        Protocol::Snmp => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Community: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("public", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":snmp", Style::default().fg(ACCENT)),
+                    Span::styled(" to build packet", Style::default().fg(FG_HINT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::Ssdp => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Target: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("ssdp:all", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":ssdp", Style::default().fg(ACCENT)),
+                    Span::styled(" to build packet", Style::default().fg(FG_HINT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::Smb => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Dialects: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("NT LM 0.12, SMB 2.x", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":smb :smb1 :smb2", Style::default().fg(ACCENT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::Ldap => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Scope: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("Subtree", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":ldap :ldaprootdse :ldapbase", Style::default().fg(ACCENT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::NetBios => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Query: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("Name Query", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":netbios :nbstat", Style::default().fg(ACCENT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::Dhcp => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Type: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("DHCP Discover", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":dhcp :dhcpxid", Style::default().fg(ACCENT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::Kerberos => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Type: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("AS-REQ", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":kerberos <realm> <user>", Style::default().fg(ACCENT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
+        Protocol::Arp => {
+            let info = vec![
+                ListItem::new(Line::from(vec![
+                    Span::styled("Type: ", Style::default().fg(FG_SECONDARY)),
+                    Span::styled("ARP Request", Style::default().fg(ACCENT_BRIGHT)),
+                ])),
+                ListItem::new(Line::from(vec![
+                    Span::styled("Use ", Style::default().fg(FG_HINT)),
+                    Span::styled(":arp :arpreply", Style::default().fg(ACCENT)),
+                ])),
+            ];
+            let list = List::new(info);
+            frame.render_widget(list, inner);
+        }
     }
 }
 
@@ -547,6 +692,54 @@ fn render_target_config(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
                 Span::styled("123", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Snmp => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("161", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Ssdp => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("1900", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Smb => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("445", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Ldap => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("389", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::NetBios => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("137", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Dhcp => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("67/68", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Kerberos => {
+            lines.push(Line::from(vec![
+                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("88", Style::default().fg(ACCENT)),
+            ]));
+        }
+        Protocol::Arp => {
+            lines.push(Line::from(vec![
+                Span::styled("Layer:  ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("L2 (Ethernet)", Style::default().fg(ACCENT)),
             ]));
         }
         Protocol::Raw => {}

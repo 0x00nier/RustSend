@@ -163,6 +163,7 @@ pub struct IcmpResult {
 }
 
 /// Send ICMP echo request using pnet raw sockets
+#[tracing::instrument(skip(payload), fields(target = %target, identifier, sequence, timeout_ms = timeout.as_millis() as u64))]
 pub fn send_icmp_echo_raw(
     target: IpAddr,
     identifier: u16,
@@ -170,6 +171,7 @@ pub fn send_icmp_echo_raw(
     payload: &[u8],
     timeout: Duration,
 ) -> Result<IcmpResult> {
+    tracing::debug!("Sending ICMP echo request to {}", target);
     let target_v4 = match target {
         IpAddr::V4(v4) => v4,
         IpAddr::V6(_) => return Err(anyhow::anyhow!("IPv6 ICMP not yet supported")),
@@ -182,7 +184,10 @@ pub fn send_icmp_echo_raw(
     let (mut tx, mut rx) = transport_channel(
         4096,
         TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Icmp)),
-    ).map_err(|e| anyhow::anyhow!("Failed to create transport channel: {}", e))?;
+    ).map_err(|e| {
+        tracing::warn!("Failed to create ICMP transport channel: {}", e);
+        anyhow::anyhow!("Failed to create ICMP transport channel (requires elevated privileges): {}", e)
+    })?;
 
     // Build ICMP echo request
     let mut buffer = vec![0u8; packet_size];

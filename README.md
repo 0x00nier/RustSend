@@ -72,6 +72,17 @@ sudo setcap cap_net_raw+ep ./target/release/noircast
 ./target/release/noircast
 ```
 
+## Quick Start
+
+1. Launch NoirCast: `./target/release/noircast`
+2. Press `i` to enter insert mode and type target: `192.168.1.1:80`
+3. Press `Esc` to return to normal mode
+4. Press `1` for TCP or `P` to open protocol picker
+5. Press `s` to send packets
+6. View results in the Response Log pane
+
+For raw socket scans (SYN, ICMP), run with sudo or set capabilities.
+
 ## Usage
 
 ### Command Line Options
@@ -104,6 +115,8 @@ Options:
 | `s` | Send packet(s) |
 | `r` | Retry last failed |
 | `c` | Clear logs |
+| `e` | Open packet editor popup |
+| `P` | Open protocol picker popup |
 | `i` | Enter Insert mode (edit target) |
 | `:` | Enter Command mode |
 | `/` | Enter Search mode |
@@ -120,6 +133,9 @@ Options:
 | `5` | HTTPS |
 | `6` | DNS |
 | `7` | NTP |
+| `P` | Open protocol picker (for SNMP, SSDP, SMB, LDAP, NetBIOS, DHCP, Kerberos, ARP) |
+
+The protocol picker supports fuzzy search - just type to filter protocols.
 
 #### Scan Type Selection
 | Key | Scan Type |
@@ -144,21 +160,52 @@ Options:
 
 Enter command mode with `:` and type:
 
+#### Target & Scanning
 | Command | Description |
 |---------|-------------|
 | `:target <host>` | Set target host |
-| `:port <port>` | Set target port(s) |
+| `:port <port>` | Set target port(s) (e.g., `80`, `80-443`, `80,443,8080`) |
 | `:count <n>` | Set packet count |
-| `:scan <type>` | Set scan type (syn, connect, fin, etc.) |
+| `:scan <type>` | Set scan type (syn, connect, fin, null, xmas, ack, udp) |
 | `:send` | Send packets |
-| `:flood [rate]` | Start flood mode (optionally limit rate) |
-| `:stop` | Stop flood mode |
-| `:stats` | Show statistics |
 | `:ports top20` | Set top 20 common ports |
 | `:ports top100` | Set top 100 common ports |
+
+#### Packet Metadata
+| Command | Description |
+|---------|-------------|
+| `:packet` / `:edit` | Open packet editor popup |
+| `:srcport <n>` | Set source port |
+| `:dstport <n>` | Set destination port |
+| `:ttl <n>` | Set TTL (0-255) |
+| `:seq <n>` | Set TCP sequence number |
+| `:ack <n>` | Set TCP acknowledgment number |
+| `:window <n>` | Set TCP window size |
+| `:payload <hex>` | Set payload (hex bytes, e.g., `48656C6C6F`) |
+| `:randseq` | Randomize sequence number |
+| `:randport` | Randomize source port |
+
+#### Protocol Commands
+| Command | Description |
+|---------|-------------|
 | `:dns` | Build DNS query packet |
 | `:http` | Build HTTP request packet |
+| `:snmp` | Send SNMP request |
+| `:ntp` | Send NTP request |
+| `:ssdp` | Send SSDP discovery |
+
+#### Flood Mode
+| Command | Description |
+|---------|-------------|
+| `:flood [rate]` | Start flood mode (optionally limit rate) |
+| `:stop` | Stop flood mode |
+
+#### Utility
+| Command | Description |
+|---------|-------------|
+| `:stats` | Show statistics |
 | `:clear` | Clear logs and captures |
+| `:debug` | Toggle debug mode |
 | `:help` | Show help |
 | `:quit` | Exit |
 
@@ -202,6 +249,8 @@ src/
     mod.rs        - UI rendering with ratatui
     help.rs       - Help system and key hints
     widgets.rs    - Custom UI widgets
+    packet_editor.rs - Packet metadata editor popup
+    protocol_picker.rs - Protocol selection popup
 ```
 
 ## Dependencies

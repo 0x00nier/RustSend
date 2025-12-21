@@ -21,11 +21,20 @@ pub fn init_logging(args: &Args) -> Result<()> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(format!("noircast={}", log_level)));
 
+    // Get log directory and ensure it exists
+    let default_dir = std::path::PathBuf::from(".");
+    let log_dir = args.log_file
+        .parent()
+        .unwrap_or(&default_dir);
+
+    // Create directory if it doesn't exist
+    if !log_dir.as_os_str().is_empty() && log_dir != std::path::Path::new(".") {
+        std::fs::create_dir_all(log_dir)?;
+    }
+
     // Create file appender
     let file_appender = tracing_appender::rolling::daily(
-        args.log_file
-            .parent()
-            .unwrap_or(&std::path::PathBuf::from(".")),
+        log_dir,
         args.log_file.file_name().unwrap_or_default(),
     );
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);

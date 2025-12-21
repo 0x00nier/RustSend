@@ -2,7 +2,7 @@
 //!
 //! Implements vim-like navigation and command handling
 
-use crate::app::{ActivePane, App, HttpDirection, HttpStreamEntry, InputMode, PacketDirection, TargetField};
+use crate::app::{ActivePane, App, HttpDirection, HttpStreamEntry, InputMode, PacketDirection, PacketEditorField, TargetField};
 use crate::config::{PacketTemplate, Protocol, ScanType, TcpFlag};
 use crate::network::protocols::{DnsQuery, DnsType, NtpPacket, get_service_name};
 use crate::network::http::{HttpRequest, HttpResponse, HttpMethod, HttpStreamParser, status_description, format_headers};
@@ -23,6 +23,18 @@ pub async fn handle_key_event(app: &mut App, key: KeyEvent) {
         _ => {}
     }
 
+    // Protocol picker popup takes priority when visible
+    if app.show_protocol_picker {
+        handle_protocol_picker_keys(app, key);
+        return;
+    }
+
+    // Packet editor popup takes priority when visible
+    if app.show_packet_editor {
+        handle_packet_editor_keys(app, key);
+        return;
+    }
+
     // Mode-specific handling
     match app.input_mode {
         InputMode::Normal => handle_normal_mode(app, key).await,
@@ -30,6 +42,169 @@ pub async fn handle_key_event(app: &mut App, key: KeyEvent) {
         InputMode::Command => handle_command_mode(app, key).await,
         InputMode::Help => handle_help_mode(app, key),
         InputMode::Search => handle_search_mode(app, key),
+    }
+}
+
+/// Handle keys in the packet editor popup
+fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
+    if app.packet_editor.editing {
+        // Editing a field
+        match key.code {
+            KeyCode::Esc => {
+                // Cancel editing
+                app.packet_editor.editing = false;
+                app.packet_editor.field_buffer.clear();
+            }
+            KeyCode::Enter => {
+                // Apply the value
+                if app.packet_editor.apply_buffer() {
+                    app.log_success(format!("{} updated", app.packet_editor.current_field.label()));
+                } else {
+                    app.log_error(format!("Invalid value for {}", app.packet_editor.current_field.label()));
+                }
+                app.packet_editor.editing = false;
+                app.packet_editor.field_buffer.clear();
+            }
+            KeyCode::Backspace => {
+                app.packet_editor.field_buffer.pop();
+            }
+            KeyCode::Char(c) => {
+                // For payload, only allow hex characters
+                if app.packet_editor.current_field == PacketEditorField::Payload {
+                    if c.is_ascii_hexdigit() {
+                        app.packet_editor.field_buffer.push(c.to_ascii_uppercase());
+                    }
+                } else {
+                    // For numeric fields, only allow digits
+                    if c.is_ascii_digit() {
+                        app.packet_editor.field_buffer.push(c);
+                    }
+                }
+            }
+            _ => {}
+        }
+    } else {
+        // Navigation mode
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.show_packet_editor = false;
+                app.log_debug("Packet editor closed");
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.packet_editor.current_field = app.packet_editor.current_field.next();
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.packet_editor.current_field = app.packet_editor.current_field.prev();
+            }
+            KeyCode::Enter | KeyCode::Char('i') => {
+                // Start editing current field
+                app.packet_editor.editing = true;
+                app.packet_editor.field_buffer = app.packet_editor.get_current_value();
+            }
+            KeyCode::Char('r') => {
+                // Randomize current field
+                match app.packet_editor.current_field {
+                    PacketEditorField::SourcePort => {
+                        app.packet_editor.source_port = rand::random::<u16>() | 0x8000;
+                        app.log_info(format!("Source port randomized: {}", app.packet_editor.source_port));
+                    }
+                    PacketEditorField::SeqNum => {
+                        app.packet_editor.seq_num = rand::random();
+                        app.log_info(format!("Sequence number randomized: {}", app.packet_editor.seq_num));
+                    }
+                    PacketEditorField::AckNum => {
+                        app.packet_editor.ack_num = rand::random();
+                        app.log_info(format!("Ack number randomized: {}", app.packet_editor.ack_num));
+                    }
+                    _ => {
+                        app.log_warning("This field cannot be randomized");
+                    }
+                }
+            }
+            KeyCode::Char('c') => {
+                // Clear payload
+                if app.packet_editor.current_field == PacketEditorField::Payload {
+                    app.packet_editor.payload_hex.clear();
+                    app.log_info("Payload cleared");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Get filtered protocols for the picker
+fn get_filtered_protocols(filter: &str) -> Vec<Protocol> {
+    let all = vec![
+        Protocol::Tcp,
+        Protocol::Udp,
+        Protocol::Icmp,
+        Protocol::Http,
+        Protocol::Https,
+        Protocol::Dns,
+        Protocol::Ntp,
+        Protocol::Snmp,
+        Protocol::Ssdp,
+        Protocol::Smb,
+        Protocol::Ldap,
+        Protocol::NetBios,
+        Protocol::Dhcp,
+        Protocol::Kerberos,
+        Protocol::Arp,
+        Protocol::Raw,
+    ];
+
+    if filter.is_empty() {
+        return all;
+    }
+
+    let filter_lower = filter.to_lowercase();
+    all.into_iter()
+        .filter(|p| format!("{}", p).to_lowercase().contains(&filter_lower))
+        .collect()
+}
+
+/// Handle keys in the protocol picker popup
+fn handle_protocol_picker_keys(app: &mut App, key: KeyEvent) {
+    let protocols = get_filtered_protocols(&app.protocol_picker_filter);
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_protocol_picker = false;
+            app.protocol_picker_filter.clear();
+            app.protocol_picker_index = 0;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if !protocols.is_empty() {
+                app.protocol_picker_index = (app.protocol_picker_index + 1) % protocols.len();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if !protocols.is_empty() {
+                app.protocol_picker_index = app.protocol_picker_index
+                    .checked_sub(1)
+                    .unwrap_or(protocols.len().saturating_sub(1));
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(proto) = protocols.get(app.protocol_picker_index) {
+                app.set_protocol(*proto);
+                app.show_protocol_picker = false;
+                app.protocol_picker_filter.clear();
+                app.protocol_picker_index = 0;
+            }
+        }
+        KeyCode::Backspace => {
+            app.protocol_picker_filter.pop();
+            // Reset index if filter changes
+            app.protocol_picker_index = 0;
+        }
+        KeyCode::Char(c) if c.is_alphanumeric() => {
+            app.protocol_picker_filter.push(c);
+            // Reset index when filter changes
+            app.protocol_picker_index = 0;
+        }
+        _ => {}
     }
 }
 
@@ -172,6 +347,14 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             // Clear logs
             app.logs.clear();
             app.log_info("Logs cleared");
+        }
+        KeyCode::Char('e') => {
+            // Open packet editor
+            app.show_packet_editor = true;
+        }
+        KeyCode::Char('P') => {
+            // Open protocol picker
+            app.show_protocol_picker = true;
         }
 
         // Protocol selection (number keys)
@@ -521,6 +704,14 @@ async fn handle_send(app: &mut App) {
         app.log_error("No target specified. Use 'i' to enter target.");
         return;
     }
+
+    tracing::info!(
+        target = %app.target.host,
+        protocol = %app.selected_protocol,
+        scan_type = %app.selected_scan_type,
+        packet_count = app.packet_count,
+        "Initiating packet send"
+    );
 
     let packet_count = app.packet_count;
 
@@ -1022,6 +1213,8 @@ async fn execute_command(app: &mut App, command: &str) {
         return;
     }
 
+    tracing::debug!(command = %command, "Executing command");
+
     match parts[0] {
         "q" | "quit" | "exit" => {
             app.quit();
@@ -1097,6 +1290,110 @@ async fn execute_command(app: &mut App, command: &str) {
         "help" | "h" => {
             app.show_help = true;
             app.input_mode = InputMode::Help;
+        }
+        "packet" | "edit" | "pe" => {
+            app.show_packet_editor = true;
+            app.log_info("Packet editor opened");
+        }
+        "payload" => {
+            if parts.len() > 1 {
+                // Set payload from hex string
+                let hex_str: String = parts[1..].join("").chars().filter(|c| c.is_ascii_hexdigit()).collect();
+                if hex_str.len() % 2 == 0 {
+                    app.packet_editor.payload_hex = hex_str.to_uppercase();
+                    let byte_count = app.packet_editor.payload_hex.len() / 2;
+                    app.log_success(format!("Payload set: {} bytes", byte_count));
+                } else {
+                    app.log_error("Invalid hex payload: must have even number of hex characters");
+                }
+            } else {
+                // Show current payload
+                if let Some(bytes) = app.packet_editor.to_payload_bytes() {
+                    app.log_info(format!("Payload: {} bytes - {:02X?}", bytes.len(), bytes));
+                } else {
+                    app.log_info("No payload configured");
+                }
+            }
+        }
+        "srcport" | "sp" => {
+            if parts.len() > 1 {
+                if let Ok(port) = parts[1].parse::<u16>() {
+                    app.packet_editor.source_port = port;
+                    app.log_success(format!("Source port set to: {}", port));
+                } else {
+                    app.log_error("Invalid port number");
+                }
+            } else {
+                app.log_info(format!("Source port: {}", app.packet_editor.source_port));
+            }
+        }
+        "dstport" | "dp" => {
+            if parts.len() > 1 {
+                if let Ok(port) = parts[1].parse::<u16>() {
+                    app.packet_editor.dest_port = port;
+                    app.log_success(format!("Dest port set to: {}", port));
+                } else {
+                    app.log_error("Invalid port number");
+                }
+            } else {
+                app.log_info(format!("Dest port: {}", app.packet_editor.dest_port));
+            }
+        }
+        "ttl" => {
+            if parts.len() > 1 {
+                if let Ok(ttl) = parts[1].parse::<u8>() {
+                    app.packet_editor.ttl = ttl;
+                    app.log_success(format!("TTL set to: {}", ttl));
+                } else {
+                    app.log_error("Invalid TTL (0-255)");
+                }
+            } else {
+                app.log_info(format!("TTL: {}", app.packet_editor.ttl));
+            }
+        }
+        "seq" | "seqnum" => {
+            if parts.len() > 1 {
+                if let Ok(seq) = parts[1].parse::<u32>() {
+                    app.packet_editor.seq_num = seq;
+                    app.log_success(format!("Sequence number set to: {}", seq));
+                } else {
+                    app.log_error("Invalid sequence number");
+                }
+            } else {
+                app.log_info(format!("Sequence number: {}", app.packet_editor.seq_num));
+            }
+        }
+        "ack" | "acknum" => {
+            if parts.len() > 1 {
+                if let Ok(ack) = parts[1].parse::<u32>() {
+                    app.packet_editor.ack_num = ack;
+                    app.log_success(format!("Ack number set to: {}", ack));
+                } else {
+                    app.log_error("Invalid ack number");
+                }
+            } else {
+                app.log_info(format!("Ack number: {}", app.packet_editor.ack_num));
+            }
+        }
+        "window" | "win" => {
+            if parts.len() > 1 {
+                if let Ok(win) = parts[1].parse::<u16>() {
+                    app.packet_editor.window_size = win;
+                    app.log_success(format!("Window size set to: {}", win));
+                } else {
+                    app.log_error("Invalid window size");
+                }
+            } else {
+                app.log_info(format!("Window size: {}", app.packet_editor.window_size));
+            }
+        }
+        "randseq" => {
+            app.packet_editor.seq_num = rand::random();
+            app.log_info(format!("Randomized sequence number: {}", app.packet_editor.seq_num));
+        }
+        "randport" => {
+            app.packet_editor.source_port = rand::random::<u16>() | 0x8000;
+            app.log_info(format!("Randomized source port: {}", app.packet_editor.source_port));
         }
         "debug" => {
             app.args.debug = !app.args.debug;
@@ -1574,9 +1871,9 @@ async fn execute_command(app: &mut App, command: &str) {
 
             // Use PacketError variants
             let _pe1 = PacketError::InvalidSize { expected: 20, actual: 10 };
-            let _pe2 = PacketError::InvalidAddress("test".to_string());
+            let _pe2 = PacketError::InvalidAddress { address: "test".to_string(), reason: "invalid format".to_string() };
             let _pe3 = PacketError::UnsupportedProtocol("SCTP".to_string());
-            let _pe4 = PacketError::ChecksumError;
+            let _pe4 = PacketError::ChecksumError { packet_type: "TCP".to_string() };
 
             // Use PacketResponse fields
             let resp = PacketResponse {

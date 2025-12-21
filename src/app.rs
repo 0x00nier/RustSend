@@ -242,6 +242,142 @@ impl std::fmt::Display for JobStatus {
     }
 }
 
+/// Packet editor field being edited
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PacketEditorField {
+    #[default]
+    SourcePort,
+    DestPort,
+    Ttl,
+    SeqNum,
+    AckNum,
+    WindowSize,
+    Payload,
+}
+
+impl PacketEditorField {
+    pub fn next(&self) -> Self {
+        match self {
+            PacketEditorField::SourcePort => PacketEditorField::DestPort,
+            PacketEditorField::DestPort => PacketEditorField::Ttl,
+            PacketEditorField::Ttl => PacketEditorField::SeqNum,
+            PacketEditorField::SeqNum => PacketEditorField::AckNum,
+            PacketEditorField::AckNum => PacketEditorField::WindowSize,
+            PacketEditorField::WindowSize => PacketEditorField::Payload,
+            PacketEditorField::Payload => PacketEditorField::SourcePort,
+        }
+    }
+
+    pub fn prev(&self) -> Self {
+        match self {
+            PacketEditorField::SourcePort => PacketEditorField::Payload,
+            PacketEditorField::DestPort => PacketEditorField::SourcePort,
+            PacketEditorField::Ttl => PacketEditorField::DestPort,
+            PacketEditorField::SeqNum => PacketEditorField::Ttl,
+            PacketEditorField::AckNum => PacketEditorField::SeqNum,
+            PacketEditorField::WindowSize => PacketEditorField::AckNum,
+            PacketEditorField::Payload => PacketEditorField::WindowSize,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            PacketEditorField::SourcePort => "Source Port",
+            PacketEditorField::DestPort => "Dest Port",
+            PacketEditorField::Ttl => "TTL",
+            PacketEditorField::SeqNum => "Sequence #",
+            PacketEditorField::AckNum => "Ack #",
+            PacketEditorField::WindowSize => "Window Size",
+            PacketEditorField::Payload => "Payload (hex)",
+        }
+    }
+}
+
+/// State for the packet editor popup
+#[derive(Debug, Clone, Default)]
+pub struct PacketEditorState {
+    pub source_port: u16,
+    pub dest_port: u16,
+    pub ttl: u8,
+    pub seq_num: u32,
+    pub ack_num: u32,
+    pub window_size: u16,
+    pub payload_hex: String,
+    pub current_field: PacketEditorField,
+    pub field_buffer: String,
+    pub editing: bool,
+}
+
+impl PacketEditorState {
+    pub fn new() -> Self {
+        Self {
+            source_port: rand::random::<u16>() | 0x8000, // Random high port
+            dest_port: 80,
+            ttl: 64,
+            seq_num: rand::random(),
+            ack_num: 0,
+            window_size: 65535,
+            payload_hex: String::new(),
+            current_field: PacketEditorField::default(),
+            field_buffer: String::new(),
+            editing: false,
+        }
+    }
+
+    pub fn get_current_value(&self) -> String {
+        match self.current_field {
+            PacketEditorField::SourcePort => self.source_port.to_string(),
+            PacketEditorField::DestPort => self.dest_port.to_string(),
+            PacketEditorField::Ttl => self.ttl.to_string(),
+            PacketEditorField::SeqNum => self.seq_num.to_string(),
+            PacketEditorField::AckNum => self.ack_num.to_string(),
+            PacketEditorField::WindowSize => self.window_size.to_string(),
+            PacketEditorField::Payload => self.payload_hex.clone(),
+        }
+    }
+
+    pub fn apply_buffer(&mut self) -> bool {
+        let value = &self.field_buffer;
+        match self.current_field {
+            PacketEditorField::SourcePort => {
+                if let Ok(v) = value.parse() { self.source_port = v; true } else { false }
+            }
+            PacketEditorField::DestPort => {
+                if let Ok(v) = value.parse() { self.dest_port = v; true } else { false }
+            }
+            PacketEditorField::Ttl => {
+                if let Ok(v) = value.parse() { self.ttl = v; true } else { false }
+            }
+            PacketEditorField::SeqNum => {
+                if let Ok(v) = value.parse() { self.seq_num = v; true } else { false }
+            }
+            PacketEditorField::AckNum => {
+                if let Ok(v) = value.parse() { self.ack_num = v; true } else { false }
+            }
+            PacketEditorField::WindowSize => {
+                if let Ok(v) = value.parse() { self.window_size = v; true } else { false }
+            }
+            PacketEditorField::Payload => {
+                // Validate hex string (pairs of hex digits)
+                let cleaned: String = value.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+                if cleaned.len() % 2 == 0 {
+                    self.payload_hex = cleaned;
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    pub fn to_payload_bytes(&self) -> Option<Vec<u8>> {
+        if self.payload_hex.is_empty() {
+            return None;
+        }
+        hex::decode(&self.payload_hex).ok()
+    }
+}
+
 /// Main application state
 pub struct App {
     // Application state
@@ -263,6 +399,15 @@ pub struct App {
     pub pending_keys: Vec<char>,
     pub key_timeout: std::time::Duration,
     pub last_key_time: std::time::Instant,
+
+    // Packet editor popup
+    pub show_packet_editor: bool,
+    pub packet_editor: PacketEditorState,
+
+    // Protocol picker popup
+    pub show_protocol_picker: bool,
+    pub protocol_picker_index: usize,
+    pub protocol_picker_filter: String,
 
     // Packet configuration
     pub selected_protocol: Protocol,
@@ -371,6 +516,13 @@ impl App {
             key_timeout: std::time::Duration::from_millis(500),
             last_key_time: std::time::Instant::now(),
 
+            show_packet_editor: false,
+            packet_editor: PacketEditorState::new(),
+
+            show_protocol_picker: false,
+            protocol_picker_index: 0,
+            protocol_picker_filter: String::new(),
+
             selected_protocol: Protocol::Tcp,
             selected_scan_type: ScanType::SynScan,
             selected_flags: vec![TcpFlag::Syn],
@@ -466,24 +618,34 @@ impl App {
     }
 
     pub fn log_info(&mut self, message: impl Into<String>) {
-        self.log(LogLevel::Info, message);
+        let msg = message.into();
+        tracing::info!("{}", msg);
+        self.log(LogLevel::Info, msg);
     }
 
     pub fn log_success(&mut self, message: impl Into<String>) {
-        self.log(LogLevel::Success, message);
+        let msg = message.into();
+        tracing::info!(status = "success", "{}", msg);
+        self.log(LogLevel::Success, msg);
     }
 
     pub fn log_warning(&mut self, message: impl Into<String>) {
-        self.log(LogLevel::Warning, message);
+        let msg = message.into();
+        tracing::warn!("{}", msg);
+        self.log(LogLevel::Warning, msg);
     }
 
     pub fn log_error(&mut self, message: impl Into<String>) {
-        self.log(LogLevel::Error, message);
+        let msg = message.into();
+        tracing::error!("{}", msg);
+        self.log(LogLevel::Error, msg);
     }
 
     pub fn log_debug(&mut self, message: impl Into<String>) {
+        let msg = message.into();
+        tracing::debug!("{}", msg);
         if self.args.debug {
-            self.log(LogLevel::Debug, message);
+            self.log(LogLevel::Debug, msg);
         }
     }
 
@@ -576,6 +738,8 @@ impl App {
             Protocol::Dns => 6, // DNS query types
             Protocol::Http | Protocol::Https => 6, // HTTP methods
             Protocol::Ntp | Protocol::Raw => PacketTemplate::all().len(),
+            Protocol::Snmp | Protocol::Ssdp | Protocol::Smb | Protocol::Ldap |
+            Protocol::NetBios | Protocol::Dhcp | Protocol::Kerberos | Protocol::Arp => 1,
         }
     }
 
@@ -1002,5 +1166,63 @@ mod tests {
         app.log_info("Test message");
         assert_eq!(app.logs.len(), 1);
         assert_eq!(app.logs[0].level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_packet_editor_state_new() {
+        let state = PacketEditorState::new();
+        assert_eq!(state.ttl, 64);
+        assert_eq!(state.dest_port, 80);
+        assert_eq!(state.window_size, 65535);
+        assert!(state.payload_hex.is_empty());
+        assert!(!state.editing);
+    }
+
+    #[test]
+    fn test_packet_editor_field_navigation() {
+        assert_eq!(PacketEditorField::SourcePort.next(), PacketEditorField::DestPort);
+        assert_eq!(PacketEditorField::Payload.next(), PacketEditorField::SourcePort);
+        assert_eq!(PacketEditorField::SourcePort.prev(), PacketEditorField::Payload);
+    }
+
+    #[test]
+    fn test_packet_editor_apply_buffer() {
+        let mut state = PacketEditorState::new();
+
+        // Test valid port number
+        state.current_field = PacketEditorField::DestPort;
+        state.field_buffer = "443".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.dest_port, 443);
+
+        // Test valid TTL
+        state.current_field = PacketEditorField::Ttl;
+        state.field_buffer = "128".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.ttl, 128);
+
+        // Test valid hex payload
+        state.current_field = PacketEditorField::Payload;
+        state.field_buffer = "48656C6C6F".to_string(); // "Hello"
+        assert!(state.apply_buffer());
+        assert_eq!(state.payload_hex, "48656C6C6F");
+
+        // Test invalid hex payload (odd length)
+        state.field_buffer = "48656".to_string();
+        assert!(!state.apply_buffer());
+    }
+
+    #[test]
+    fn test_packet_editor_to_payload_bytes() {
+        let mut state = PacketEditorState::new();
+
+        // Empty payload returns None
+        assert!(state.to_payload_bytes().is_none());
+
+        // Valid hex payload returns bytes
+        state.payload_hex = "48656C6C6F".to_string(); // "Hello"
+        let bytes = state.to_payload_bytes().unwrap();
+        assert_eq!(bytes, vec![0x48, 0x65, 0x6C, 0x6C, 0x6F]);
+        assert_eq!(String::from_utf8(bytes).unwrap(), "Hello");
     }
 }

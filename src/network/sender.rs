@@ -175,11 +175,13 @@ impl PacketSender {
     /// Note: This performs a full TCP 3-way handshake. For raw socket scans
     /// (SYN, FIN, NULL, XMAS, ACK, Window) that send custom TCP flags,
     /// elevated privileges (root/admin) are required.
+    #[tracing::instrument(skip(self), fields(target = %target_ip, port_count = ports.len()))]
     pub async fn tcp_connect_scan(
         &self,
         target_ip: IpAddr,
         ports: &[u16],
     ) -> Vec<PacketResponse> {
+        tracing::debug!("Starting TCP connect scan on {} ports", ports.len());
         let semaphore = self.semaphore.clone();
         let timeout_ms = self.config.timeout_ms;
         let response_tx = self.response_tx.clone();
@@ -428,7 +430,9 @@ impl PacketSender {
     }
 
     /// Perform UDP scan with service-specific probes for better detection
+    #[tracing::instrument(skip(self), fields(target = %target_ip, port_count = ports.len()))]
     pub async fn udp_scan(&self, target_ip: IpAddr, ports: &[u16]) -> Vec<PacketResponse> {
+        tracing::debug!("Starting UDP scan on {} ports", ports.len());
         let semaphore = self.semaphore.clone();
         let timeout_ms = self.config.timeout_ms;
         let response_tx = self.response_tx.clone();
@@ -591,6 +595,7 @@ impl PacketSender {
     }
 
     /// Send HTTP request and get response
+    #[tracing::instrument(skip(self, headers, body), fields(target = %target_ip, port, method, path))]
     pub async fn send_http_request(
         &self,
         target_ip: IpAddr,
@@ -600,6 +605,7 @@ impl PacketSender {
         headers: &HashMap<String, String>,
         body: Option<&[u8]>,
     ) -> Result<(Vec<u8>, Duration)> {
+        tracing::debug!("Sending HTTP {} request to {}:{}{}", method, target_ip, port, path);
         let start = Instant::now();
         let socket_addr = SocketAddr::new(target_ip, port);
 
@@ -608,8 +614,8 @@ impl PacketSender {
             TcpStream::connect(socket_addr),
         )
         .await
-        .context("Connection timeout")?
-        .context("Failed to connect")?;
+        .context(format!("Connection to {}:{} timed out after {}ms", target_ip, port, self.config.timeout_ms))?
+        .context(format!("Failed to connect to {}:{}", target_ip, port))?;
 
         // Build HTTP request
         let mut request = format!("{} {} HTTP/1.1\r\n", method, path);
@@ -738,6 +744,7 @@ impl PacketSender {
     }
 
     /// Send ICMP echo requests (ping) to multiple targets with batch support
+    #[tracing::instrument(skip(self), fields(target_count = targets.len(), icmp_type, icmp_code))]
     pub async fn send_icmp_batch(
         &self,
         targets: &[IpAddr],
@@ -746,6 +753,7 @@ impl PacketSender {
         icmp_id: u16,
         start_seq: u16,
     ) -> Vec<PacketResponse> {
+        tracing::debug!("Sending ICMP batch to {} targets (type={}, code={})", targets.len(), icmp_type, icmp_code);
         let semaphore = self.semaphore.clone();
         let timeout_ms = self.config.timeout_ms;
         let tx = self.response_tx.clone();
@@ -892,6 +900,7 @@ impl PacketSender {
     }
 
     /// Send DNS queries with batch support
+    #[tracing::instrument(skip(self), fields(target = %target_ip, domain, query_type, count))]
     pub async fn send_dns_batch(
         &self,
         target_ip: IpAddr,
@@ -899,6 +908,7 @@ impl PacketSender {
         query_type: u16,
         count: usize,
     ) -> Vec<PacketResponse> {
+        tracing::debug!("Sending {} DNS queries for {} (type {})", count, domain, query_type);
         let semaphore = self.semaphore.clone();
         let timeout_ms = self.config.timeout_ms;
         let tx = self.response_tx.clone();
@@ -999,10 +1009,12 @@ impl PacketSender {
     }
 
     /// Send NTP requests with batch support
+    #[tracing::instrument(skip(self), fields(target_count = targets.len()))]
     pub async fn send_ntp_batch(
         &self,
         targets: &[IpAddr],
     ) -> Vec<PacketResponse> {
+        tracing::debug!("Sending NTP requests to {} targets", targets.len());
         let semaphore = self.semaphore.clone();
         let timeout_ms = self.config.timeout_ms;
         let tx = self.response_tx.clone();
