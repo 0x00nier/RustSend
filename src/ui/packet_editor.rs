@@ -163,12 +163,20 @@ fn format_tcp_flags(flags: u8) -> String {
 
 /// Render the editable fields (protocol-aware)
 fn render_fields(frame: &mut Frame, app: &App, area: Rect, fields: &[PacketEditorField]) {
+    // Check raw socket capability (cached)
+    let has_raw_socket = crate::network::raw_socket::get_cached_availability().unwrap_or(false);
+
     let rows: Vec<Row> = fields.iter().map(|field| {
         let is_selected = *field == app.packet_editor.current_field;
         let is_editing = is_selected && app.packet_editor.editing;
+        let requires_raw = field.requires_raw_socket();
+        let raw_unavailable = requires_raw && !has_raw_socket;
 
+        // Dim fields that require raw sockets when not available
         let label_style = if is_selected {
             Style::default().fg(ACCENT_BRIGHT).bold()
+        } else if raw_unavailable {
+            Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM)
         } else {
             Style::default().fg(FG_SECONDARY)
         };
@@ -182,14 +190,33 @@ fn render_fields(frame: &mut Frame, app: &App, area: Rect, fields: &[PacketEdito
         let value_style = if is_editing {
             Style::default().fg(WARNING).add_modifier(Modifier::BOLD)
         } else if is_selected {
-            Style::default().fg(ACCENT_BRIGHT)
+            if raw_unavailable {
+                Style::default().fg(WARNING)  // Orange/warning for unavailable raw fields
+            } else {
+                Style::default().fg(ACCENT_BRIGHT)
+            }
+        } else if raw_unavailable {
+            Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM)
         } else {
             Style::default().fg(FG_PRIMARY)
         };
 
-        let indicator = if is_selected { "▶ " } else { "  " };
+        // Show lock indicator for raw socket fields when not available
+        let indicator = if is_selected {
+            if raw_unavailable { "! " } else { "> " }
+        } else if raw_unavailable {
+            "# "  // Hash for locked/unavailable
+        } else {
+            "  "
+        };
         let indicator_style = if is_selected {
-            Style::default().fg(ACCENT_BRIGHT)
+            if raw_unavailable {
+                Style::default().fg(WARNING)
+            } else {
+                Style::default().fg(ACCENT_BRIGHT)
+            }
+        } else if raw_unavailable {
+            Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM)
         } else {
             Style::default().fg(BG_COLOR)
         };
@@ -261,12 +288,24 @@ fn dhcp_type_name(t: u8) -> &'static str {
 
 /// Render help text at the bottom
 fn render_help_text(frame: &mut Frame, app: &App, area: Rect) {
+    let has_raw_socket = crate::network::raw_socket::get_cached_availability().unwrap_or(false);
+    let current_requires_raw = app.packet_editor.current_field.requires_raw_socket();
+    let show_raw_warning = current_requires_raw && !has_raw_socket;
+
     let help_text = if app.packet_editor.editing {
         Line::from(vec![
             Span::styled("Enter", Style::default().fg(ACCENT)),
             Span::styled(" save  ", Style::default().fg(FG_DIM)),
             Span::styled("Esc", Style::default().fg(ACCENT)),
             Span::styled(" cancel", Style::default().fg(FG_DIM)),
+        ])
+    } else if show_raw_warning {
+        // Show raw socket warning with command
+        Line::from(vec![
+            Span::styled("! ", Style::default().fg(WARNING)),
+            Span::styled("Requires CAP_NET_RAW: ", Style::default().fg(WARNING)),
+            Span::styled("sudo setcap cap_net_raw+ep ", Style::default().fg(ACCENT)),
+            Span::styled("<binary>", Style::default().fg(ACCENT).add_modifier(Modifier::DIM)),
         ])
     } else {
         Line::from(vec![

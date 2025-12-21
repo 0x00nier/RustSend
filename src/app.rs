@@ -316,92 +316,159 @@ pub enum PacketEditorField {
 }
 
 impl PacketEditorField {
-    /// Get fields relevant for a specific protocol
+    /// Full IP header fields (Layer 3) - requires CAP_NET_RAW to actually modify
+    const IP_FIELDS: &'static [Self] = &[
+        Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags, Self::FragmentOffset,
+    ];
+
+    /// Full TCP header fields - requires raw sockets to modify on established connections
+    const TCP_FIELDS: &'static [Self] = &[
+        Self::SourcePort, Self::DestPort, Self::TcpFlags,
+        Self::SeqNum, Self::AckNum, Self::WindowSize, Self::UrgentPtr,
+    ];
+
+    /// UDP header fields
+    const UDP_FIELDS: &'static [Self] = &[
+        Self::SourcePort, Self::DestPort,
+    ];
+
+    /// Get fields relevant for a specific protocol.
+    /// All IP-based protocols get full IP header fields.
+    /// TCP-based protocols also get TCP header fields.
+    /// Only ARP (Layer 2) doesn't have IP fields.
     pub fn fields_for_protocol(protocol: Protocol) -> Vec<Self> {
         match protocol {
-            Protocol::Tcp => vec![
-                // IP Header
-                Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags, Self::FragmentOffset,
-                // TCP Header
-                Self::SourcePort, Self::DestPort, Self::TcpFlags,
-                Self::SeqNum, Self::AckNum, Self::WindowSize, Self::UrgentPtr,
-                Self::Payload,
-            ],
-            Protocol::Udp => vec![
-                // IP Header
-                Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags,
-                // UDP Header
-                Self::SourcePort, Self::DestPort,
-                Self::Payload,
-            ],
-            Protocol::Icmp => vec![
-                // IP Header
-                Self::SourceIp, Self::Ttl, Self::Tos,
-                // ICMP fields
-                Self::IcmpType, Self::IcmpCode, Self::IcmpId, Self::IcmpSeq,
-                Self::Payload,
-            ],
-            Protocol::Dns => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::DnsQueryType, Self::DnsDomain, Self::Payload,
-            ],
-            Protocol::Http | Protocol::Https => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::HttpMethod, Self::HttpPath, Self::HttpHeaders,
-            ],
-            Protocol::Ntp => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort, Self::Payload,
-            ],
-            Protocol::Snmp => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::SnmpVersion, Self::SnmpCommunity,
-            ],
-            Protocol::Ssdp => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SsdpTarget, Self::Payload,
-            ],
-            Protocol::Smb => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::SmbVersion,
-            ],
-            Protocol::Ldap => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::LdapScope, Self::LdapBaseDn,
-            ],
-            Protocol::NetBios => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::NetBiosName,
-            ],
-            Protocol::Dhcp => vec![
-                Self::DhcpType, Self::DhcpClientMac,
-            ],
-            Protocol::Kerberos => vec![
-                Self::SourceIp, Self::Ttl,
-                Self::SourcePort, Self::DestPort,
-                Self::KerberosRealm, Self::KerberosUser,
-            ],
+            // === RAW TCP ===
+            Protocol::Tcp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::TCP_FIELDS);
+                f.push(Self::Payload);
+                f
+            }
+
+            // === RAW UDP ===
+            Protocol::Udp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.push(Self::Payload);
+                f
+            }
+
+            // === ICMP ===
+            Protocol::Icmp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(&[Self::IcmpType, Self::IcmpCode, Self::IcmpId, Self::IcmpSeq, Self::Payload]);
+                f
+            }
+
+            // === TCP-BASED APPLICATION PROTOCOLS ===
+            Protocol::Http | Protocol::Https => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(&[Self::HttpMethod, Self::HttpPath, Self::HttpHeaders]);
+                f
+            }
+
+            Protocol::Smb => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::TCP_FIELDS);
+                f.push(Self::SmbVersion);
+                f
+            }
+
+            Protocol::Ldap => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(&[Self::LdapScope, Self::LdapBaseDn]);
+                f
+            }
+
+            Protocol::Kerberos => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(&[Self::KerberosRealm, Self::KerberosUser]);
+                f
+            }
+
+            // === UDP-BASED APPLICATION PROTOCOLS ===
+            Protocol::Dns => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.extend_from_slice(&[Self::DnsQueryType, Self::DnsDomain, Self::Payload]);
+                f
+            }
+
+            Protocol::Ntp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.push(Self::Payload);
+                f
+            }
+
+            Protocol::Snmp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.extend_from_slice(&[Self::SnmpVersion, Self::SnmpCommunity]);
+                f
+            }
+
+            Protocol::Ssdp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.extend_from_slice(&[Self::SsdpTarget, Self::Payload]);
+                f
+            }
+
+            Protocol::NetBios => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.push(Self::NetBiosName);
+                f
+            }
+
+            Protocol::Dhcp => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::UDP_FIELDS);
+                f.extend_from_slice(&[Self::DhcpType, Self::DhcpClientMac]);
+                f
+            }
+
+            // === LAYER 2 (no IP header) ===
             Protocol::Arp => vec![
-                // ARP is Layer 2, uses MAC addresses
                 Self::ArpOperation,
                 Self::ArpSenderMac, Self::ArpSenderIp,
                 Self::ArpTargetMac, Self::ArpTargetIp,
             ],
-            Protocol::Raw => vec![
-                // Full IP header control
-                Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags, Self::FragmentOffset,
-                // Transport layer
-                Self::SourcePort, Self::DestPort, Self::TcpFlags,
-                Self::SeqNum, Self::AckNum, Self::WindowSize,
-                Self::Payload,
-            ],
+
+            // === RAW MODE ===
+            Protocol::Raw => {
+                let mut f = Self::IP_FIELDS.to_vec();
+                f.extend_from_slice(Self::TCP_FIELDS);
+                f.push(Self::Payload);
+                f
+            }
         }
+    }
+
+    /// Check if this field requires raw socket privileges (CAP_NET_RAW) to actually work.
+    /// These fields can be edited in the UI but won't take effect without elevated privileges.
+    pub fn requires_raw_socket(&self) -> bool {
+        matches!(self,
+            // IP header modifications require raw sockets
+            PacketEditorField::SourceIp |
+            PacketEditorField::IpId |
+            PacketEditorField::IpFlags |
+            PacketEditorField::FragmentOffset |
+            PacketEditorField::Tos |
+            // TCP flags on established connections require raw sockets
+            PacketEditorField::TcpFlags |
+            PacketEditorField::SeqNum |
+            PacketEditorField::AckNum |
+            PacketEditorField::UrgentPtr |
+            // ARP requires raw L2 access
+            PacketEditorField::ArpSenderMac |
+            PacketEditorField::ArpSenderIp
+        )
     }
 
     /// Get next field for a given protocol context
