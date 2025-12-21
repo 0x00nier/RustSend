@@ -77,9 +77,16 @@ pub fn render_packet_editor(frame: &mut Frame, app: &App) {
 /// Get display value for a field
 fn get_field_value(app: &App, field: &PacketEditorField) -> String {
     match field {
+        // IP Header fields
+        PacketEditorField::SourceIp => if app.packet_editor.source_ip.is_empty() { "(auto)".to_string() } else { app.packet_editor.source_ip.clone() },
+        PacketEditorField::IpId => app.packet_editor.ip_id.to_string(),
+        PacketEditorField::IpFlags => format!("0x{:02X} ({})", app.packet_editor.ip_flags, ip_flags_name(app.packet_editor.ip_flags)),
+        PacketEditorField::FragmentOffset => app.packet_editor.fragment_offset.to_string(),
+        PacketEditorField::Tos => format!("{} (DSCP {})", app.packet_editor.tos, app.packet_editor.tos >> 2),
+        PacketEditorField::Ttl => app.packet_editor.ttl.to_string(),
+        // Transport fields
         PacketEditorField::SourcePort => app.packet_editor.source_port.to_string(),
         PacketEditorField::DestPort => app.packet_editor.dest_port.to_string(),
-        PacketEditorField::Ttl => app.packet_editor.ttl.to_string(),
         PacketEditorField::Payload => {
             if app.packet_editor.payload_hex.is_empty() {
                 "(empty)".to_string()
@@ -87,31 +94,71 @@ fn get_field_value(app: &App, field: &PacketEditorField) -> String {
                 format_hex_preview(&app.packet_editor.payload_hex, 20)
             }
         }
+        // TCP fields
+        PacketEditorField::TcpFlags => format_tcp_flags(app.packet_editor.tcp_flags),
         PacketEditorField::SeqNum => app.packet_editor.seq_num.to_string(),
         PacketEditorField::AckNum => app.packet_editor.ack_num.to_string(),
         PacketEditorField::WindowSize => app.packet_editor.window_size.to_string(),
+        PacketEditorField::UrgentPtr => app.packet_editor.urgent_ptr.to_string(),
+        // ICMP fields
         PacketEditorField::IcmpType => format!("{} ({})", app.packet_editor.icmp_type, icmp_type_name(app.packet_editor.icmp_type)),
         PacketEditorField::IcmpCode => app.packet_editor.icmp_code.to_string(),
         PacketEditorField::IcmpId => app.packet_editor.icmp_id.to_string(),
         PacketEditorField::IcmpSeq => app.packet_editor.icmp_seq.to_string(),
+        // DNS fields
         PacketEditorField::DnsQueryType => format!("{} ({})", app.packet_editor.dns_query_type, dns_type_name(app.packet_editor.dns_query_type)),
         PacketEditorField::DnsDomain => if app.packet_editor.dns_domain.is_empty() { "(target host)".to_string() } else { app.packet_editor.dns_domain.clone() },
+        // HTTP fields
         PacketEditorField::HttpMethod => app.packet_editor.http_method.clone(),
         PacketEditorField::HttpPath => app.packet_editor.http_path.clone(),
         PacketEditorField::HttpHeaders => if app.packet_editor.http_headers.is_empty() { "(default)".to_string() } else { format!("{} bytes", app.packet_editor.http_headers.len()) },
+        // SNMP fields
         PacketEditorField::SnmpVersion => format!("v{}", if app.packet_editor.snmp_version == 2 { "2c".to_string() } else { app.packet_editor.snmp_version.to_string() }),
         PacketEditorField::SnmpCommunity => app.packet_editor.snmp_community.clone(),
+        // SSDP fields
         PacketEditorField::SsdpTarget => app.packet_editor.ssdp_target.clone(),
+        // SMB fields
         PacketEditorField::SmbVersion => format!("SMB{}", app.packet_editor.smb_version),
+        // LDAP fields
         PacketEditorField::LdapScope => format!("{} ({})", app.packet_editor.ldap_scope, ldap_scope_name(app.packet_editor.ldap_scope)),
         PacketEditorField::LdapBaseDn => if app.packet_editor.ldap_base_dn.is_empty() { "(empty)".to_string() } else { app.packet_editor.ldap_base_dn.clone() },
+        // NetBIOS fields
         PacketEditorField::NetBiosName => if app.packet_editor.netbios_name.is_empty() { "(broadcast)".to_string() } else { app.packet_editor.netbios_name.clone() },
+        // DHCP fields
         PacketEditorField::DhcpType => format!("{} ({})", app.packet_editor.dhcp_type, dhcp_type_name(app.packet_editor.dhcp_type)),
+        PacketEditorField::DhcpClientMac => if app.packet_editor.dhcp_client_mac.is_empty() { "(auto)".to_string() } else { app.packet_editor.dhcp_client_mac.clone() },
+        // Kerberos fields
         PacketEditorField::KerberosRealm => if app.packet_editor.kerberos_realm.is_empty() { "(required)".to_string() } else { app.packet_editor.kerberos_realm.clone() },
         PacketEditorField::KerberosUser => if app.packet_editor.kerberos_user.is_empty() { "(required)".to_string() } else { app.packet_editor.kerberos_user.clone() },
+        // ARP fields
         PacketEditorField::ArpOperation => format!("{} ({})", app.packet_editor.arp_operation, if app.packet_editor.arp_operation == 1 { "Request" } else { "Reply" }),
+        PacketEditorField::ArpSenderMac => if app.packet_editor.arp_sender_mac.is_empty() { "(auto)".to_string() } else { app.packet_editor.arp_sender_mac.clone() },
+        PacketEditorField::ArpSenderIp => if app.packet_editor.arp_sender_ip.is_empty() { "(auto)".to_string() } else { app.packet_editor.arp_sender_ip.clone() },
+        PacketEditorField::ArpTargetMac => if app.packet_editor.arp_target_mac.is_empty() { "FF:FF:FF:FF:FF:FF".to_string() } else { app.packet_editor.arp_target_mac.clone() },
         PacketEditorField::ArpTargetIp => if app.packet_editor.arp_target_ip.is_empty() { "(target host)".to_string() } else { app.packet_editor.arp_target_ip.clone() },
     }
+}
+
+/// Format IP flags as human-readable string
+fn ip_flags_name(flags: u8) -> String {
+    let mut parts = Vec::new();
+    if flags & 0x02 != 0 { parts.push("DF"); }
+    if flags & 0x01 != 0 { parts.push("MF"); }
+    if parts.is_empty() { "none".to_string() } else { parts.join(",") }
+}
+
+/// Format TCP flags as human-readable string
+fn format_tcp_flags(flags: u8) -> String {
+    let mut parts = Vec::new();
+    if flags & 0x01 != 0 { parts.push("FIN"); }
+    if flags & 0x02 != 0 { parts.push("SYN"); }
+    if flags & 0x04 != 0 { parts.push("RST"); }
+    if flags & 0x08 != 0 { parts.push("PSH"); }
+    if flags & 0x10 != 0 { parts.push("ACK"); }
+    if flags & 0x20 != 0 { parts.push("URG"); }
+    if flags & 0x40 != 0 { parts.push("ECE"); }
+    if flags & 0x80 != 0 { parts.push("CWR"); }
+    if parts.is_empty() { "NONE".to_string() } else { parts.join(",") }
 }
 
 /// Render the editable fields (protocol-aware)

@@ -246,17 +246,26 @@ impl std::fmt::Display for JobStatus {
 /// Packet editor field being edited - protocol-aware
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PacketEditorField {
-    // Common fields
+    // IP Header fields (Layer 3)
     #[default]
+    SourceIp,
+    IpId,
+    IpFlags,
+    FragmentOffset,
+    Tos,
+    Ttl,
+
+    // Common transport fields
     SourcePort,
     DestPort,
-    Ttl,
     Payload,
 
-    // TCP-specific
+    // TCP-specific (Layer 4)
+    TcpFlags,
     SeqNum,
     AckNum,
     WindowSize,
+    UrgentPtr,
 
     // ICMP-specific
     IcmpType,
@@ -292,13 +301,17 @@ pub enum PacketEditorField {
 
     // DHCP-specific
     DhcpType,
+    DhcpClientMac,
 
     // Kerberos-specific
     KerberosRealm,
     KerberosUser,
 
-    // ARP-specific
+    // ARP-specific (Layer 2)
     ArpOperation,
+    ArpSenderMac,
+    ArpSenderIp,
+    ArpTargetMac,
     ArpTargetIp,
 }
 
@@ -307,51 +320,86 @@ impl PacketEditorField {
     pub fn fields_for_protocol(protocol: Protocol) -> Vec<Self> {
         match protocol {
             Protocol::Tcp => vec![
-                Self::SourcePort, Self::DestPort, Self::Ttl,
-                Self::SeqNum, Self::AckNum, Self::WindowSize, Self::Payload,
+                // IP Header
+                Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags, Self::FragmentOffset,
+                // TCP Header
+                Self::SourcePort, Self::DestPort, Self::TcpFlags,
+                Self::SeqNum, Self::AckNum, Self::WindowSize, Self::UrgentPtr,
+                Self::Payload,
             ],
             Protocol::Udp => vec![
-                Self::SourcePort, Self::DestPort, Self::Ttl, Self::Payload,
+                // IP Header
+                Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags,
+                // UDP Header
+                Self::SourcePort, Self::DestPort,
+                Self::Payload,
             ],
             Protocol::Icmp => vec![
+                // IP Header
+                Self::SourceIp, Self::Ttl, Self::Tos,
+                // ICMP fields
                 Self::IcmpType, Self::IcmpCode, Self::IcmpId, Self::IcmpSeq,
-                Self::Ttl, Self::Payload,
+                Self::Payload,
             ],
             Protocol::Dns => vec![
-                Self::DnsQueryType, Self::DnsDomain, Self::DestPort, Self::Payload,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::DnsQueryType, Self::DnsDomain, Self::Payload,
             ],
             Protocol::Http | Protocol::Https => vec![
-                Self::HttpMethod, Self::HttpPath, Self::HttpHeaders, Self::DestPort,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::HttpMethod, Self::HttpPath, Self::HttpHeaders,
             ],
             Protocol::Ntp => vec![
-                Self::DestPort, Self::Payload,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort, Self::Payload,
             ],
             Protocol::Snmp => vec![
-                Self::SnmpVersion, Self::SnmpCommunity, Self::DestPort,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::SnmpVersion, Self::SnmpCommunity,
             ],
             Protocol::Ssdp => vec![
+                Self::SourceIp, Self::Ttl,
                 Self::SsdpTarget, Self::Payload,
             ],
             Protocol::Smb => vec![
-                Self::SmbVersion, Self::DestPort,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::SmbVersion,
             ],
             Protocol::Ldap => vec![
-                Self::LdapScope, Self::LdapBaseDn, Self::DestPort,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::LdapScope, Self::LdapBaseDn,
             ],
             Protocol::NetBios => vec![
-                Self::NetBiosName, Self::DestPort,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::NetBiosName,
             ],
             Protocol::Dhcp => vec![
-                Self::DhcpType,
+                Self::DhcpType, Self::DhcpClientMac,
             ],
             Protocol::Kerberos => vec![
-                Self::KerberosRealm, Self::KerberosUser, Self::DestPort,
+                Self::SourceIp, Self::Ttl,
+                Self::SourcePort, Self::DestPort,
+                Self::KerberosRealm, Self::KerberosUser,
             ],
             Protocol::Arp => vec![
-                Self::ArpOperation, Self::ArpTargetIp,
+                // ARP is Layer 2, uses MAC addresses
+                Self::ArpOperation,
+                Self::ArpSenderMac, Self::ArpSenderIp,
+                Self::ArpTargetMac, Self::ArpTargetIp,
             ],
             Protocol::Raw => vec![
-                Self::SourcePort, Self::DestPort, Self::Ttl, Self::Payload,
+                // Full IP header control
+                Self::SourceIp, Self::Ttl, Self::Tos, Self::IpId, Self::IpFlags, Self::FragmentOffset,
+                // Transport layer
+                Self::SourcePort, Self::DestPort, Self::TcpFlags,
+                Self::SeqNum, Self::AckNum, Self::WindowSize,
+                Self::Payload,
             ],
         }
     }
@@ -380,28 +428,25 @@ impl PacketEditorField {
         }
     }
 
-    /// Legacy next/prev for backwards compatibility (used in tests)
-    #[cfg(test)]
-    pub fn next(&self) -> Self {
-        self.next_for_protocol(Protocol::Tcp)
-    }
-
-    #[cfg(test)]
-    pub fn prev(&self) -> Self {
-        self.prev_for_protocol(Protocol::Tcp)
-    }
-
     pub fn label(&self) -> &'static str {
         match self {
-            // Common
+            // IP Header
+            PacketEditorField::SourceIp => "Source IP",
+            PacketEditorField::IpId => "IP ID",
+            PacketEditorField::IpFlags => "IP Flags",
+            PacketEditorField::FragmentOffset => "Frag Offset",
+            PacketEditorField::Tos => "TOS/DSCP",
+            PacketEditorField::Ttl => "TTL",
+            // Transport Common
             PacketEditorField::SourcePort => "Source Port",
             PacketEditorField::DestPort => "Dest Port",
-            PacketEditorField::Ttl => "TTL",
             PacketEditorField::Payload => "Payload (hex)",
             // TCP
+            PacketEditorField::TcpFlags => "TCP Flags",
             PacketEditorField::SeqNum => "Sequence #",
             PacketEditorField::AckNum => "Ack #",
             PacketEditorField::WindowSize => "Window Size",
+            PacketEditorField::UrgentPtr => "Urgent Ptr",
             // ICMP
             PacketEditorField::IcmpType => "ICMP Type",
             PacketEditorField::IcmpCode => "ICMP Code",
@@ -428,110 +473,392 @@ impl PacketEditorField {
             PacketEditorField::NetBiosName => "Name",
             // DHCP
             PacketEditorField::DhcpType => "Message Type",
+            PacketEditorField::DhcpClientMac => "Client MAC",
             // Kerberos
             PacketEditorField::KerberosRealm => "Realm",
             PacketEditorField::KerberosUser => "Username",
             // ARP
             PacketEditorField::ArpOperation => "Operation",
+            PacketEditorField::ArpSenderMac => "Sender MAC",
+            PacketEditorField::ArpSenderIp => "Sender IP",
+            PacketEditorField::ArpTargetMac => "Target MAC",
             PacketEditorField::ArpTargetIp => "Target IP",
         }
     }
 }
 
 /// State for the packet editor popup - protocol-aware
+///
+/// This struct holds all editable packet fields across different protocols,
+/// from Layer 2 (Ethernet/ARP) through Layer 4 (TCP/UDP) and application protocols.
+///
+/// ## IP Header Fields (Layer 3)
+/// These fields require CAP_NET_RAW capability on Linux or Administrator on Windows
+/// to actually be sent with custom values.
+///
+/// ## TCP Flags Reference
+/// TCP flags control connection state. Common combinations:
+/// - SYN (0x02): Initiate connection (SYN scan)
+/// - SYN,ACK (0x12): Server acknowledging SYN
+/// - ACK (0x10): Acknowledge received data
+/// - FIN (0x01): Graceful connection close
+/// - RST (0x04): Abruptly terminate connection
+/// - PSH (0x08): Push data immediately to application
+/// - URG (0x20): Urgent data present (see urgent_ptr)
+/// - FIN,PSH,URG (0x29): XMAS scan - all flags set
 #[derive(Debug, Clone, Default)]
 pub struct PacketEditorState {
-    // Common fields
+    // =========================================================================
+    // IP HEADER FIELDS (Layer 3) - RFC 791
+    // =========================================================================
+
+    /// Source IP address for IP spoofing.
+    /// Empty string = use the system's real IP address.
+    /// Requires raw socket privileges (CAP_NET_RAW on Linux).
+    /// Example: "192.168.1.100" or "10.0.0.1"
+    pub source_ip: String,
+
+    /// IP Identification field (16-bit).
+    /// Used to identify fragments of an original datagram.
+    /// Usually randomized per packet. Range: 0-65535.
+    pub ip_id: u16,
+
+    /// IP Flags (3-bit field, stored in low bits of this u8).
+    /// - Bit 0 (0x01): MF (More Fragments) - more fragments follow
+    /// - Bit 1 (0x02): DF (Don't Fragment) - packet should not be fragmented
+    /// - Bit 2: Reserved, must be 0
+    /// Common values: 0x02 (DF set, normal), 0x00 (allow fragmentation)
+    pub ip_flags: u8,
+
+    /// Fragment Offset (13-bit, in 8-byte units).
+    /// Position of this fragment in the original datagram.
+    /// 0 = first fragment or unfragmented packet.
+    /// Max value: 8191 (represents offset of 65528 bytes).
+    pub fragment_offset: u16,
+
+    /// Type of Service / Differentiated Services Code Point (DSCP).
+    /// 8-bit field controlling packet priority and handling:
+    /// - Bits 0-1: ECN (Explicit Congestion Notification)
+    /// - Bits 2-7: DSCP (6 bits, value 0-63)
+    /// Common values:
+    /// - 0x00: Default/Best Effort
+    /// - 0x28 (40): Expedited Forwarding (EF) - low latency
+    /// - 0x60 (96): Network Control - highest priority
+    /// DSCP value = tos >> 2
+    pub tos: u8,
+
+    // =========================================================================
+    // COMMON TRANSPORT FIELDS (Layer 4)
+    // =========================================================================
+
+    /// Source port number (16-bit, 0-65535).
+    /// For client connections, typically ephemeral port (>= 32768).
     pub source_port: u16,
+
+    /// Destination port number (16-bit, 0-65535).
+    /// Common ports: 80 (HTTP), 443 (HTTPS), 22 (SSH), 53 (DNS).
     pub dest_port: u16,
+
+    /// Time To Live (8-bit, 0-255).
+    /// Decremented by each router; packet dropped when TTL=0.
+    /// Used for traceroute. Common defaults:
+    /// - Linux: 64
+    /// - Windows: 128
+    /// - Cisco/network devices: 255
     pub ttl: u8,
+
+    /// Raw payload data in hexadecimal format.
+    /// Must have even number of hex digits (each byte = 2 hex chars).
+    /// Example: "48656C6C6F" = "Hello" in ASCII.
     pub payload_hex: String,
 
-    // TCP-specific
+    // =========================================================================
+    // TCP-SPECIFIC FIELDS (Layer 4) - RFC 793
+    // =========================================================================
+
+    /// TCP Flags bitmask (6 main flags + 2 congestion flags).
+    /// - 0x01: FIN - No more data from sender
+    /// - 0x02: SYN - Synchronize sequence numbers (connection init)
+    /// - 0x04: RST - Reset the connection
+    /// - 0x08: PSH - Push function (deliver data immediately)
+    /// - 0x10: ACK - Acknowledgment field is significant
+    /// - 0x20: URG - Urgent pointer field is significant
+    /// - 0x40: ECE - ECN-Echo (congestion experienced)
+    /// - 0x80: CWR - Congestion Window Reduced
+    /// Can be set as: "SYN", "SYN,ACK", "FIN,PSH,URG", or numeric "18"
+    pub tcp_flags: u8,
+
+    /// TCP Sequence Number (32-bit).
+    /// First byte of data in this segment. Randomly initialized.
+    /// Wraps around after 4GB of data transferred.
     pub seq_num: u32,
+
+    /// TCP Acknowledgment Number (32-bit).
+    /// Next sequence number the sender expects to receive.
+    /// Only valid when ACK flag is set.
     pub ack_num: u32,
+
+    /// TCP Window Size (16-bit).
+    /// Flow control: bytes sender can receive before acknowledgment.
+    /// Modern systems use window scaling for larger values.
+    /// Default 65535 = maximum without scaling.
     pub window_size: u16,
 
-    // ICMP-specific
+    /// TCP Urgent Pointer (16-bit).
+    /// Offset from sequence number to urgent data boundary.
+    /// Only valid when URG flag is set. Rarely used today.
+    pub urgent_ptr: u16,
+
+    // =========================================================================
+    // ICMP-SPECIFIC FIELDS - RFC 792
+    // =========================================================================
+
+    /// ICMP Type (8-bit). Common types:
+    /// - 0: Echo Reply (ping response)
+    /// - 3: Destination Unreachable
+    /// - 8: Echo Request (ping)
+    /// - 11: Time Exceeded (traceroute)
+    /// - 13: Timestamp Request
     pub icmp_type: u8,
+
+    /// ICMP Code (8-bit). Subtype of ICMP message.
+    /// For Type 3 (Unreachable): 0=Net, 1=Host, 3=Port unreachable
+    /// For Echo Request/Reply: always 0.
     pub icmp_code: u8,
+
+    /// ICMP Identifier (16-bit).
+    /// Used to match Echo Requests with Replies.
+    /// Usually set to process ID or random value.
     pub icmp_id: u16,
+
+    /// ICMP Sequence Number (16-bit).
+    /// Incremented for each Echo Request sent.
+    /// Helps identify lost or reordered packets.
     pub icmp_seq: u16,
 
-    // DNS-specific
+    // =========================================================================
+    // DNS-SPECIFIC FIELDS - RFC 1035
+    // =========================================================================
+
+    /// DNS Query Type. Common types:
+    /// - 1: A (IPv4 address)
+    /// - 2: NS (Name Server)
+    /// - 5: CNAME (Canonical Name)
+    /// - 6: SOA (Start of Authority)
+    /// - 15: MX (Mail Exchange)
+    /// - 16: TXT (Text record)
+    /// - 28: AAAA (IPv6 address)
+    /// - 255: ANY (all records)
     pub dns_query_type: u16,
+
+    /// Domain name to query. Example: "example.com"
     pub dns_domain: String,
 
-    // HTTP-specific
+    // =========================================================================
+    // HTTP-SPECIFIC FIELDS
+    // =========================================================================
+
+    /// HTTP Method: GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH
     pub http_method: String,
+
+    /// HTTP Request Path. Example: "/api/v1/users" or "/"
     pub http_path: String,
+
+    /// Additional HTTP Headers (one per line, "Name: Value" format).
+    /// Example: "Authorization: Bearer token123"
     pub http_headers: String,
 
-    // SNMP-specific
+    // =========================================================================
+    // SNMP-SPECIFIC FIELDS - RFC 1157/3416
+    // =========================================================================
+
+    /// SNMP Version: 1, 2 (v2c), or 3
+    /// v1/v2c use community strings, v3 uses authentication.
     pub snmp_version: u8,
+
+    /// SNMP Community String (v1/v2c authentication).
+    /// Default: "public" for read, "private" for write.
     pub snmp_community: String,
 
-    // SSDP-specific
+    // =========================================================================
+    // SSDP-SPECIFIC FIELDS (UPnP Discovery)
+    // =========================================================================
+
+    /// SSDP Search Target (ST header). Examples:
+    /// - "ssdp:all" - discover all devices
+    /// - "upnp:rootdevice" - root devices only
+    /// - "urn:schemas-upnp-org:device:MediaServer:1"
     pub ssdp_target: String,
 
-    // SMB-specific
+    // =========================================================================
+    // SMB-SPECIFIC FIELDS
+    // =========================================================================
+
+    /// SMB Protocol Version: 1, 2, or 3
     pub smb_version: u8,
 
-    // LDAP-specific
+    // =========================================================================
+    // LDAP-SPECIFIC FIELDS - RFC 4511
+    // =========================================================================
+
+    /// LDAP Search Scope:
+    /// - 0: Base (only the base object)
+    /// - 1: One Level (immediate children only)
+    /// - 2: Subtree (base and all descendants)
     pub ldap_scope: u8,
+
+    /// LDAP Base DN (Distinguished Name).
+    /// Example: "dc=example,dc=com" or "ou=users,dc=corp,dc=local"
     pub ldap_base_dn: String,
 
-    // NetBIOS-specific
+    // =========================================================================
+    // NETBIOS-SPECIFIC FIELDS - RFC 1002
+    // =========================================================================
+
+    /// NetBIOS Name to query (15 chars max, padded with spaces).
+    /// Empty = wildcard query (*) for all names.
     pub netbios_name: String,
 
-    // DHCP-specific
+    // =========================================================================
+    // DHCP-SPECIFIC FIELDS - RFC 2131
+    // =========================================================================
+
+    /// DHCP Message Type:
+    /// - 1: DISCOVER - client looking for servers
+    /// - 2: OFFER - server response to discover
+    /// - 3: REQUEST - client requesting offered address
+    /// - 4: DECLINE - client declining offer
+    /// - 5: ACK - server confirming lease
+    /// - 6: NAK - server denying request
+    /// - 7: RELEASE - client releasing address
+    /// - 8: INFORM - client requesting config only
     pub dhcp_type: u8,
 
-    // Kerberos-specific
+    /// Client MAC address for DHCP. Format: "AA:BB:CC:DD:EE:FF"
+    /// Empty = use system's actual MAC address.
+    pub dhcp_client_mac: String,
+
+    // =========================================================================
+    // KERBEROS-SPECIFIC FIELDS - RFC 4120
+    // =========================================================================
+
+    /// Kerberos Realm (uppercase domain). Example: "EXAMPLE.COM"
     pub kerberos_realm: String,
+
+    /// Kerberos Principal (username). Example: "admin"
     pub kerberos_user: String,
 
-    // ARP-specific
+    // =========================================================================
+    // ARP-SPECIFIC FIELDS (Layer 2) - RFC 826
+    // =========================================================================
+
+    /// ARP Operation:
+    /// - 1: Request (who has IP X? tell IP Y)
+    /// - 2: Reply (IP X is at MAC Z)
     pub arp_operation: u8,
+
+    /// ARP Sender Hardware Address (MAC).
+    /// Format: "AA:BB:CC:DD:EE:FF". Empty = use system MAC.
+    pub arp_sender_mac: String,
+
+    /// ARP Sender Protocol Address (IP).
+    /// Format: "192.168.1.1". Empty = use system IP.
+    pub arp_sender_ip: String,
+
+    /// ARP Target Hardware Address (MAC).
+    /// For requests: typically "00:00:00:00:00:00" (unknown).
+    /// Empty = broadcast "FF:FF:FF:FF:FF:FF".
+    pub arp_target_mac: String,
+
+    /// ARP Target Protocol Address (IP).
+    /// The IP address being queried/announced.
     pub arp_target_ip: String,
 
-    // Editor state
+    // =========================================================================
+    // EDITOR STATE
+    // =========================================================================
+
+    /// Currently selected field in the editor
     pub current_field: PacketEditorField,
+
+    /// Text buffer for the field being edited
     pub field_buffer: String,
+
+    /// Whether the user is actively editing a field
     pub editing: bool,
 }
 
 impl PacketEditorState {
     pub fn new() -> Self {
         Self {
+            // IP Header defaults
+            source_ip: String::new(),                   // Empty = use real IP
+            ip_id: rand::random(),                      // Random IP ID
+            ip_flags: 0x02,                             // DF (Don't Fragment) set by default
+            fragment_offset: 0,
+            tos: 0,                                     // Default TOS
+            ttl: 64,
+
+            // Transport defaults
             source_port: rand::random::<u16>() | 0x8000,
             dest_port: 80,
-            ttl: 64,
             payload_hex: String::new(),
+
+            // TCP defaults
+            tcp_flags: 0x02,                            // SYN flag by default
             seq_num: rand::random(),
             ack_num: 0,
             window_size: 65535,
-            icmp_type: 8,
+            urgent_ptr: 0,
+
+            // ICMP defaults
+            icmp_type: 8,                               // Echo Request
             icmp_code: 0,
             icmp_id: rand::random(),
             icmp_seq: 1,
-            dns_query_type: 1,
+
+            // DNS defaults
+            dns_query_type: 1,                          // A record
             dns_domain: String::new(),
+
+            // HTTP defaults
             http_method: "GET".to_string(),
             http_path: "/".to_string(),
             http_headers: String::new(),
-            snmp_version: 2,
+
+            // SNMP defaults
+            snmp_version: 2,                            // v2c
             snmp_community: "public".to_string(),
+
+            // SSDP defaults
             ssdp_target: "ssdp:all".to_string(),
+
+            // SMB defaults
             smb_version: 2,
-            ldap_scope: 2,
+
+            // LDAP defaults
+            ldap_scope: 2,                              // Subtree
             ldap_base_dn: String::new(),
+
+            // NetBIOS defaults
             netbios_name: String::new(),
-            dhcp_type: 1,
+
+            // DHCP defaults
+            dhcp_type: 1,                               // Discover
+            dhcp_client_mac: String::new(),
+
+            // Kerberos defaults
             kerberos_realm: String::new(),
             kerberos_user: String::new(),
-            arp_operation: 1,
+
+            // ARP defaults
+            arp_operation: 1,                           // Request
+            arp_sender_mac: String::new(),
+            arp_sender_ip: String::new(),
+            arp_target_mac: String::new(),
             arp_target_ip: String::new(),
+
+            // Editor state
             current_field: PacketEditorField::default(),
             field_buffer: String::new(),
             editing: false,
@@ -546,43 +873,124 @@ impl PacketEditorState {
 
     pub fn get_current_value(&self) -> String {
         match self.current_field {
+            // IP Header fields
+            PacketEditorField::SourceIp => if self.source_ip.is_empty() { "(auto)".to_string() } else { self.source_ip.clone() },
+            PacketEditorField::IpId => self.ip_id.to_string(),
+            PacketEditorField::IpFlags => format!("0x{:02X}", self.ip_flags),
+            PacketEditorField::FragmentOffset => self.fragment_offset.to_string(),
+            PacketEditorField::Tos => self.tos.to_string(),
+            PacketEditorField::Ttl => self.ttl.to_string(),
+            // Transport fields
             PacketEditorField::SourcePort => self.source_port.to_string(),
             PacketEditorField::DestPort => self.dest_port.to_string(),
-            PacketEditorField::Ttl => self.ttl.to_string(),
             PacketEditorField::Payload => self.payload_hex.clone(),
+            // TCP fields
+            PacketEditorField::TcpFlags => Self::format_tcp_flags(self.tcp_flags),
             PacketEditorField::SeqNum => self.seq_num.to_string(),
             PacketEditorField::AckNum => self.ack_num.to_string(),
             PacketEditorField::WindowSize => self.window_size.to_string(),
+            PacketEditorField::UrgentPtr => self.urgent_ptr.to_string(),
+            // ICMP fields
             PacketEditorField::IcmpType => self.icmp_type.to_string(),
             PacketEditorField::IcmpCode => self.icmp_code.to_string(),
             PacketEditorField::IcmpId => self.icmp_id.to_string(),
             PacketEditorField::IcmpSeq => self.icmp_seq.to_string(),
+            // DNS fields
             PacketEditorField::DnsQueryType => self.dns_query_type.to_string(),
             PacketEditorField::DnsDomain => self.dns_domain.clone(),
+            // HTTP fields
             PacketEditorField::HttpMethod => self.http_method.clone(),
             PacketEditorField::HttpPath => self.http_path.clone(),
             PacketEditorField::HttpHeaders => self.http_headers.clone(),
+            // SNMP fields
             PacketEditorField::SnmpVersion => self.snmp_version.to_string(),
             PacketEditorField::SnmpCommunity => self.snmp_community.clone(),
+            // SSDP fields
             PacketEditorField::SsdpTarget => self.ssdp_target.clone(),
+            // SMB fields
             PacketEditorField::SmbVersion => self.smb_version.to_string(),
+            // LDAP fields
             PacketEditorField::LdapScope => self.ldap_scope.to_string(),
             PacketEditorField::LdapBaseDn => self.ldap_base_dn.clone(),
+            // NetBIOS fields
             PacketEditorField::NetBiosName => self.netbios_name.clone(),
+            // DHCP fields
             PacketEditorField::DhcpType => self.dhcp_type.to_string(),
+            PacketEditorField::DhcpClientMac => if self.dhcp_client_mac.is_empty() { "(auto)".to_string() } else { self.dhcp_client_mac.clone() },
+            // Kerberos fields
             PacketEditorField::KerberosRealm => self.kerberos_realm.clone(),
             PacketEditorField::KerberosUser => self.kerberos_user.clone(),
+            // ARP fields
             PacketEditorField::ArpOperation => self.arp_operation.to_string(),
+            PacketEditorField::ArpSenderMac => if self.arp_sender_mac.is_empty() { "(auto)".to_string() } else { self.arp_sender_mac.clone() },
+            PacketEditorField::ArpSenderIp => if self.arp_sender_ip.is_empty() { "(auto)".to_string() } else { self.arp_sender_ip.clone() },
+            PacketEditorField::ArpTargetMac => if self.arp_target_mac.is_empty() { "FF:FF:FF:FF:FF:FF".to_string() } else { self.arp_target_mac.clone() },
             PacketEditorField::ArpTargetIp => self.arp_target_ip.clone(),
         }
+    }
+
+    /// Format TCP flags as a human-readable string (e.g., "SYN,ACK")
+    fn format_tcp_flags(flags: u8) -> String {
+        let mut parts = Vec::new();
+        if flags & 0x01 != 0 { parts.push("FIN"); }
+        if flags & 0x02 != 0 { parts.push("SYN"); }
+        if flags & 0x04 != 0 { parts.push("RST"); }
+        if flags & 0x08 != 0 { parts.push("PSH"); }
+        if flags & 0x10 != 0 { parts.push("ACK"); }
+        if flags & 0x20 != 0 { parts.push("URG"); }
+        if flags & 0x40 != 0 { parts.push("ECE"); }
+        if flags & 0x80 != 0 { parts.push("CWR"); }
+        if parts.is_empty() { "NONE".to_string() } else { parts.join(",") }
+    }
+
+    /// Parse TCP flags from string format (e.g., "SYN,ACK" or "SA" or "18")
+    fn parse_tcp_flags(s: &str) -> Option<u8> {
+        // Try parsing as number first
+        if let Ok(v) = s.parse::<u8>() {
+            return Some(v);
+        }
+        // Parse as comma-separated or single-letter flags
+        let s = s.to_uppercase();
+        let mut flags: u8 = 0;
+        for part in s.split(|c: char| c == ',' || c == '|' || c == ' ') {
+            let part = part.trim();
+            match part {
+                "FIN" | "F" => flags |= 0x01,
+                "SYN" | "S" => flags |= 0x02,
+                "RST" | "R" => flags |= 0x04,
+                "PSH" | "P" => flags |= 0x08,
+                "ACK" | "A" => flags |= 0x10,
+                "URG" | "U" => flags |= 0x20,
+                "ECE" | "E" => flags |= 0x40,
+                "CWR" | "C" | "W" => flags |= 0x80,
+                "" => {}
+                _ => return None,
+            }
+        }
+        Some(flags)
     }
 
     pub fn apply_buffer(&mut self) -> bool {
         let value = self.field_buffer.clone();
         match self.current_field {
+            // IP Header fields
+            PacketEditorField::SourceIp => { self.source_ip = value; true }
+            PacketEditorField::IpId => value.parse().map(|v| self.ip_id = v).is_ok(),
+            PacketEditorField::IpFlags => {
+                // Parse hex (0x02) or decimal (2)
+                let v = if value.starts_with("0x") || value.starts_with("0X") {
+                    u8::from_str_radix(&value[2..], 16).ok()
+                } else {
+                    value.parse().ok()
+                };
+                v.map(|f| self.ip_flags = f).is_some()
+            }
+            PacketEditorField::FragmentOffset => value.parse().map(|v| self.fragment_offset = v).is_ok(),
+            PacketEditorField::Tos => value.parse().map(|v| self.tos = v).is_ok(),
+            PacketEditorField::Ttl => value.parse().map(|v| self.ttl = v).is_ok(),
+            // Transport fields
             PacketEditorField::SourcePort => value.parse().map(|v| self.source_port = v).is_ok(),
             PacketEditorField::DestPort => value.parse().map(|v| self.dest_port = v).is_ok(),
-            PacketEditorField::Ttl => value.parse().map(|v| self.ttl = v).is_ok(),
             PacketEditorField::Payload => {
                 let cleaned: String = value.chars().filter(|c| c.is_ascii_hexdigit()).collect();
                 if cleaned.len() % 2 == 0 {
@@ -592,29 +1000,47 @@ impl PacketEditorState {
                     false
                 }
             }
+            // TCP fields
+            PacketEditorField::TcpFlags => Self::parse_tcp_flags(&value).map(|v| self.tcp_flags = v).is_some(),
             PacketEditorField::SeqNum => value.parse().map(|v| self.seq_num = v).is_ok(),
             PacketEditorField::AckNum => value.parse().map(|v| self.ack_num = v).is_ok(),
             PacketEditorField::WindowSize => value.parse().map(|v| self.window_size = v).is_ok(),
+            PacketEditorField::UrgentPtr => value.parse().map(|v| self.urgent_ptr = v).is_ok(),
+            // ICMP fields
             PacketEditorField::IcmpType => value.parse().map(|v| self.icmp_type = v).is_ok(),
             PacketEditorField::IcmpCode => value.parse().map(|v| self.icmp_code = v).is_ok(),
             PacketEditorField::IcmpId => value.parse().map(|v| self.icmp_id = v).is_ok(),
             PacketEditorField::IcmpSeq => value.parse().map(|v| self.icmp_seq = v).is_ok(),
+            // DNS fields
             PacketEditorField::DnsQueryType => value.parse().map(|v| self.dns_query_type = v).is_ok(),
             PacketEditorField::DnsDomain => { self.dns_domain = value; true }
+            // HTTP fields
             PacketEditorField::HttpMethod => { self.http_method = value; true }
             PacketEditorField::HttpPath => { self.http_path = value; true }
             PacketEditorField::HttpHeaders => { self.http_headers = value; true }
+            // SNMP fields
             PacketEditorField::SnmpVersion => value.parse().map(|v| self.snmp_version = v).is_ok(),
             PacketEditorField::SnmpCommunity => { self.snmp_community = value; true }
+            // SSDP fields
             PacketEditorField::SsdpTarget => { self.ssdp_target = value; true }
+            // SMB fields
             PacketEditorField::SmbVersion => value.parse().map(|v| self.smb_version = v).is_ok(),
+            // LDAP fields
             PacketEditorField::LdapScope => value.parse().map(|v| self.ldap_scope = v).is_ok(),
             PacketEditorField::LdapBaseDn => { self.ldap_base_dn = value; true }
+            // NetBIOS fields
             PacketEditorField::NetBiosName => { self.netbios_name = value; true }
+            // DHCP fields
             PacketEditorField::DhcpType => value.parse().map(|v| self.dhcp_type = v).is_ok(),
+            PacketEditorField::DhcpClientMac => { self.dhcp_client_mac = value; true }
+            // Kerberos fields
             PacketEditorField::KerberosRealm => { self.kerberos_realm = value; true }
             PacketEditorField::KerberosUser => { self.kerberos_user = value; true }
+            // ARP fields
             PacketEditorField::ArpOperation => value.parse().map(|v| self.arp_operation = v).is_ok(),
+            PacketEditorField::ArpSenderMac => { self.arp_sender_mac = value; true }
+            PacketEditorField::ArpSenderIp => { self.arp_sender_ip = value; true }
+            PacketEditorField::ArpTargetMac => { self.arp_target_mac = value; true }
             PacketEditorField::ArpTargetIp => { self.arp_target_ip = value; true }
         }
     }
@@ -1487,9 +1913,15 @@ mod tests {
 
     #[test]
     fn test_packet_editor_field_navigation() {
-        assert_eq!(PacketEditorField::SourcePort.next(), PacketEditorField::DestPort);
-        assert_eq!(PacketEditorField::Payload.next(), PacketEditorField::SourcePort);
-        assert_eq!(PacketEditorField::SourcePort.prev(), PacketEditorField::Payload);
+        // Test navigation uses protocol-specific fields
+        // For TCP: SourceIp is first, then IpId, etc.
+        let tcp_fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
+        assert_eq!(tcp_fields[0].next_for_protocol(Protocol::Tcp), tcp_fields[1]);
+        assert_eq!(tcp_fields[1].prev_for_protocol(Protocol::Tcp), tcp_fields[0]);
+
+        // Last field should wrap to first
+        let last = tcp_fields.last().unwrap();
+        assert_eq!(last.next_for_protocol(Protocol::Tcp), tcp_fields[0]);
     }
 
     #[test]
@@ -1535,19 +1967,23 @@ mod tests {
 
     #[test]
     fn test_packet_editor_fields_for_protocol() {
-        // TCP should have 7 fields
+        // TCP should have IP header + TCP fields
         let tcp_fields = PacketEditorField::fields_for_protocol(Protocol::Tcp);
-        assert_eq!(tcp_fields.len(), 7);
+        assert!(tcp_fields.len() >= 10);  // IP fields + TCP fields
+        assert!(tcp_fields.contains(&PacketEditorField::SourceIp));  // IP header
+        assert!(tcp_fields.contains(&PacketEditorField::TcpFlags));  // TCP flags
         assert!(tcp_fields.contains(&PacketEditorField::SeqNum));
         assert!(tcp_fields.contains(&PacketEditorField::WindowSize));
 
-        // UDP should have fewer fields (no TCP-specific ones)
+        // UDP should have IP header + UDP fields
         let udp_fields = PacketEditorField::fields_for_protocol(Protocol::Udp);
-        assert_eq!(udp_fields.len(), 4);
-        assert!(!udp_fields.contains(&PacketEditorField::SeqNum));
+        assert!(udp_fields.len() >= 6);
+        assert!(udp_fields.contains(&PacketEditorField::SourceIp));
+        assert!(!udp_fields.contains(&PacketEditorField::SeqNum));  // No TCP fields
 
         // ICMP should have ICMP-specific fields
         let icmp_fields = PacketEditorField::fields_for_protocol(Protocol::Icmp);
+        assert!(icmp_fields.contains(&PacketEditorField::SourceIp));
         assert!(icmp_fields.contains(&PacketEditorField::IcmpType));
         assert!(icmp_fields.contains(&PacketEditorField::IcmpCode));
 
@@ -1560,6 +1996,12 @@ mod tests {
         let dns_fields = PacketEditorField::fields_for_protocol(Protocol::Dns);
         assert!(dns_fields.contains(&PacketEditorField::DnsQueryType));
         assert!(dns_fields.contains(&PacketEditorField::DnsDomain));
+
+        // ARP should have L2 fields
+        let arp_fields = PacketEditorField::fields_for_protocol(Protocol::Arp);
+        assert!(arp_fields.contains(&PacketEditorField::ArpOperation));
+        assert!(arp_fields.contains(&PacketEditorField::ArpSenderMac));
+        assert!(arp_fields.contains(&PacketEditorField::ArpTargetMac));
     }
 
     #[test]
@@ -1662,18 +2104,197 @@ mod tests {
     fn test_packet_editor_field_labels() {
         // All fields should have non-empty labels
         let all_fields = [
+            PacketEditorField::SourceIp, PacketEditorField::IpId,
+            PacketEditorField::IpFlags, PacketEditorField::Tos,
             PacketEditorField::SourcePort, PacketEditorField::DestPort,
             PacketEditorField::Ttl, PacketEditorField::Payload,
-            PacketEditorField::SeqNum, PacketEditorField::AckNum,
-            PacketEditorField::WindowSize, PacketEditorField::IcmpType,
-            PacketEditorField::IcmpCode, PacketEditorField::IcmpId,
-            PacketEditorField::IcmpSeq, PacketEditorField::DnsQueryType,
-            PacketEditorField::DnsDomain, PacketEditorField::HttpMethod,
-            PacketEditorField::HttpPath, PacketEditorField::HttpHeaders,
+            PacketEditorField::TcpFlags, PacketEditorField::SeqNum,
+            PacketEditorField::AckNum, PacketEditorField::WindowSize,
+            PacketEditorField::IcmpType, PacketEditorField::IcmpCode,
+            PacketEditorField::IcmpId, PacketEditorField::IcmpSeq,
+            PacketEditorField::DnsQueryType, PacketEditorField::DnsDomain,
+            PacketEditorField::HttpMethod, PacketEditorField::HttpPath,
+            PacketEditorField::HttpHeaders, PacketEditorField::ArpOperation,
+            PacketEditorField::ArpSenderMac, PacketEditorField::ArpTargetMac,
         ];
 
         for field in &all_fields {
             assert!(!field.label().is_empty(), "Field {:?} has empty label", field);
         }
+    }
+
+    #[test]
+    fn test_tcp_flags_parsing() {
+        // Test parsing TCP flags from various formats
+
+        // Numeric format
+        assert_eq!(PacketEditorState::parse_tcp_flags("2"), Some(0x02)); // SYN
+        assert_eq!(PacketEditorState::parse_tcp_flags("18"), Some(0x12)); // SYN+ACK
+
+        // Full name format
+        assert_eq!(PacketEditorState::parse_tcp_flags("SYN"), Some(0x02));
+        assert_eq!(PacketEditorState::parse_tcp_flags("SYN,ACK"), Some(0x12));
+        assert_eq!(PacketEditorState::parse_tcp_flags("FIN,PSH,URG"), Some(0x29));
+
+        // Single letter format
+        assert_eq!(PacketEditorState::parse_tcp_flags("S"), Some(0x02));
+        assert_eq!(PacketEditorState::parse_tcp_flags("S,A"), Some(0x12));
+
+        // All flags
+        let all_flags = PacketEditorState::parse_tcp_flags("FIN,SYN,RST,PSH,ACK,URG,ECE,CWR");
+        assert_eq!(all_flags, Some(0xFF));
+
+        // Invalid input
+        assert_eq!(PacketEditorState::parse_tcp_flags("INVALID"), None);
+    }
+
+    #[test]
+    fn test_tcp_flags_formatting() {
+        assert_eq!(PacketEditorState::format_tcp_flags(0x00), "NONE");
+        assert_eq!(PacketEditorState::format_tcp_flags(0x02), "SYN");
+        assert_eq!(PacketEditorState::format_tcp_flags(0x12), "SYN,ACK");
+        assert_eq!(PacketEditorState::format_tcp_flags(0x29), "FIN,PSH,URG");
+    }
+
+    #[test]
+    fn test_ip_header_fields() {
+        let mut state = PacketEditorState::new();
+
+        // Test IP ID field
+        state.current_field = PacketEditorField::IpId;
+        state.field_buffer = "12345".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.ip_id, 12345);
+
+        // Test IP Flags field (hex format)
+        state.current_field = PacketEditorField::IpFlags;
+        state.field_buffer = "0x02".to_string(); // DF flag
+        assert!(state.apply_buffer());
+        assert_eq!(state.ip_flags, 0x02);
+
+        // Test IP Flags field (decimal format)
+        state.field_buffer = "3".to_string(); // DF + MF
+        assert!(state.apply_buffer());
+        assert_eq!(state.ip_flags, 3);
+
+        // Test TOS/DSCP field
+        state.current_field = PacketEditorField::Tos;
+        state.field_buffer = "32".to_string(); // DSCP 8
+        assert!(state.apply_buffer());
+        assert_eq!(state.tos, 32);
+
+        // Test Fragment Offset
+        state.current_field = PacketEditorField::FragmentOffset;
+        state.field_buffer = "185".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.fragment_offset, 185);
+
+        // Test Source IP
+        state.current_field = PacketEditorField::SourceIp;
+        state.field_buffer = "192.168.1.100".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.source_ip, "192.168.1.100");
+    }
+
+    #[test]
+    fn test_tcp_flags_apply_buffer() {
+        let mut state = PacketEditorState::new();
+
+        // Test TCP flags with name format
+        state.current_field = PacketEditorField::TcpFlags;
+        state.field_buffer = "SYN,ACK".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.tcp_flags, 0x12);
+
+        // Test TCP flags with numeric format
+        state.field_buffer = "2".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.tcp_flags, 0x02);
+
+        // Test urgent pointer
+        state.current_field = PacketEditorField::UrgentPtr;
+        state.field_buffer = "100".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.urgent_ptr, 100);
+    }
+
+    #[test]
+    fn test_arp_fields() {
+        let mut state = PacketEditorState::new();
+
+        // Test ARP Operation
+        state.current_field = PacketEditorField::ArpOperation;
+        state.field_buffer = "2".to_string(); // Reply
+        assert!(state.apply_buffer());
+        assert_eq!(state.arp_operation, 2);
+
+        // Test Sender MAC
+        state.current_field = PacketEditorField::ArpSenderMac;
+        state.field_buffer = "AA:BB:CC:DD:EE:FF".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.arp_sender_mac, "AA:BB:CC:DD:EE:FF");
+
+        // Test Sender IP
+        state.current_field = PacketEditorField::ArpSenderIp;
+        state.field_buffer = "192.168.1.1".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.arp_sender_ip, "192.168.1.1");
+
+        // Test Target MAC
+        state.current_field = PacketEditorField::ArpTargetMac;
+        state.field_buffer = "00:00:00:00:00:00".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.arp_target_mac, "00:00:00:00:00:00");
+    }
+
+    #[test]
+    fn test_dhcp_fields() {
+        let mut state = PacketEditorState::new();
+
+        // Test DHCP type
+        state.current_field = PacketEditorField::DhcpType;
+        state.field_buffer = "2".to_string(); // Offer
+        assert!(state.apply_buffer());
+        assert_eq!(state.dhcp_type, 2);
+
+        // Test Client MAC
+        state.current_field = PacketEditorField::DhcpClientMac;
+        state.field_buffer = "11:22:33:44:55:66".to_string();
+        assert!(state.apply_buffer());
+        assert_eq!(state.dhcp_client_mac, "11:22:33:44:55:66");
+    }
+
+    #[test]
+    fn test_packet_editor_default_values() {
+        let state = PacketEditorState::new();
+
+        // IP Header defaults
+        assert_eq!(state.ip_flags, 0x02);  // DF set by default
+        assert_eq!(state.fragment_offset, 0);
+        assert_eq!(state.tos, 0);
+        assert_eq!(state.ttl, 64);
+        assert!(state.source_ip.is_empty());  // Auto = empty
+
+        // TCP defaults
+        assert_eq!(state.tcp_flags, 0x02);  // SYN by default
+        assert_eq!(state.window_size, 65535);
+        assert_eq!(state.urgent_ptr, 0);
+
+        // ARP defaults
+        assert_eq!(state.arp_operation, 1);  // Request
+        assert!(state.arp_sender_mac.is_empty());  // Auto
+        assert!(state.arp_target_mac.is_empty());  // Broadcast default
+    }
+
+    #[test]
+    fn test_get_current_value_auto_fields() {
+        let state = PacketEditorState::new();
+
+        // Empty source IP should show "(auto)"
+        assert!(state.source_ip.is_empty());
+
+        // Test TCP flags display
+        let flags_display = PacketEditorState::format_tcp_flags(state.tcp_flags);
+        assert_eq!(flags_display, "SYN");
     }
 }
