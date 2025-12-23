@@ -51,7 +51,8 @@ clap = { version = "4.5", features = ["derive", "env"] }
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.11", features = ["v4"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+idna = "1.0"
 rand = "0.8"
 hex = "0.4"
 byteorder = "1.5"
@@ -83,14 +84,20 @@ criterion = "0.5"
 
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+lto = "thin"          # "thin" is much faster than "fat" (true)
+codegen-units = 16    # 16 is faster than 1, slight runtime cost
 panic = "abort"
 strip = true
+incremental = true
 
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 0             # Disable debug info for faster builds
+incremental = true
+
+# Optimize dependencies in dev builds for faster iteration
+[profile.dev.package."*"]
+opt-level = 2
 
 [[bench]]
 name = "packet_benchmark"

@@ -5,27 +5,22 @@
 use crate::app::{App, PacketEditorField};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Row, Table},
     Frame,
 };
 
-// Color scheme matching the rest of the app
-const BG_COLOR: Color = Color::Rgb(0, 0, 0);
-const FG_PRIMARY: Color = Color::White;
-const FG_SECONDARY: Color = Color::Rgb(128, 128, 128);
-const FG_DIM: Color = Color::Rgb(80, 80, 80);
-const ACCENT: Color = Color::Rgb(80, 200, 100);
-const ACCENT_BRIGHT: Color = Color::Rgb(100, 255, 120);
-const WARNING: Color = Color::Rgb(200, 180, 80);
-
 /// Render the packet editor popup
 pub fn render_packet_editor(frame: &mut Frame, app: &App) {
+    let colors = app.current_theme.colors();
     let area = frame.area();
 
-    // Get protocol-specific fields
-    let fields = PacketEditorField::fields_for_protocol(app.selected_protocol);
+    // Get protocol-specific fields with context (e.g., POST shows body/cookies)
+    let fields = PacketEditorField::fields_for_protocol_context(
+        app.selected_protocol,
+        &app.packet_editor.http_method,
+    );
     let field_count = fields.len();
 
     // Calculate popup size based on field count
@@ -46,12 +41,12 @@ pub fn render_packet_editor(frame: &mut Frame, app: &App) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(ACCENT_BRIGHT).bold())
+        .title_style(Style::default().fg(colors.accent_bright).bold())
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG_COLOR))
+        .border_style(Style::default().fg(colors.accent))
+        .style(Style::default().bg(colors.bg))
         .padding(Padding::uniform(1));
 
     let inner = block.inner(popup_area);
@@ -100,6 +95,13 @@ fn get_field_value(app: &App, field: &PacketEditorField) -> String {
         PacketEditorField::AckNum => app.packet_editor.ack_num.to_string(),
         PacketEditorField::WindowSize => app.packet_editor.window_size.to_string(),
         PacketEditorField::UrgentPtr => app.packet_editor.urgent_ptr.to_string(),
+        // TCP Options fields
+        PacketEditorField::TcpMss => if app.packet_editor.tcp_mss == 0 { "off".to_string() } else { format!("{} bytes", app.packet_editor.tcp_mss) },
+        PacketEditorField::TcpWindowScale => if app.packet_editor.tcp_window_scale == 255 { "off".to_string() } else { format!("{} (x{})", app.packet_editor.tcp_window_scale, 1 << app.packet_editor.tcp_window_scale) },
+        PacketEditorField::TcpSackPermitted => if app.packet_editor.tcp_sack_permitted { "yes".to_string() } else { "no".to_string() },
+        PacketEditorField::TcpTimestampsEnabled => if app.packet_editor.tcp_timestamps_enabled { "yes".to_string() } else { "no".to_string() },
+        PacketEditorField::TcpTsVal => app.packet_editor.tcp_tsval.to_string(),
+        PacketEditorField::TcpTsEcr => app.packet_editor.tcp_tsecr.to_string(),
         // ICMP fields
         PacketEditorField::IcmpType => format!("{} ({})", app.packet_editor.icmp_type, icmp_type_name(app.packet_editor.icmp_type)),
         PacketEditorField::IcmpCode => app.packet_editor.icmp_code.to_string(),
@@ -136,6 +138,10 @@ fn get_field_value(app: &App, field: &PacketEditorField) -> String {
         PacketEditorField::ArpSenderIp => if app.packet_editor.arp_sender_ip.is_empty() { "(auto)".to_string() } else { app.packet_editor.arp_sender_ip.clone() },
         PacketEditorField::ArpTargetMac => if app.packet_editor.arp_target_mac.is_empty() { "FF:FF:FF:FF:FF:FF".to_string() } else { app.packet_editor.arp_target_mac.clone() },
         PacketEditorField::ArpTargetIp => if app.packet_editor.arp_target_ip.is_empty() { "(target host)".to_string() } else { app.packet_editor.arp_target_ip.clone() },
+        // HTTP extended fields
+        PacketEditorField::HttpBody => if app.packet_editor.http_body.is_empty() { "(empty)".to_string() } else { format!("{} bytes", app.packet_editor.http_body.len()) },
+        PacketEditorField::HttpCookies => if app.packet_editor.http_cookies.is_empty() { "(none)".to_string() } else { app.packet_editor.http_cookies.clone() },
+        PacketEditorField::HttpContentType => if app.packet_editor.http_content_type.is_empty() { "application/json".to_string() } else { app.packet_editor.http_content_type.clone() },
     }
 }
 
@@ -163,6 +169,7 @@ fn format_tcp_flags(flags: u8) -> String {
 
 /// Render the editable fields (protocol-aware)
 fn render_fields(frame: &mut Frame, app: &App, area: Rect, fields: &[PacketEditorField]) {
+    let colors = app.current_theme.colors();
     // Check raw socket capability (cached)
     let has_raw_socket = crate::network::raw_socket::get_cached_availability().unwrap_or(false);
 
@@ -174,51 +181,51 @@ fn render_fields(frame: &mut Frame, app: &App, area: Rect, fields: &[PacketEdito
 
         // Dim fields that require raw sockets when not available
         let label_style = if is_selected {
-            Style::default().fg(ACCENT_BRIGHT).bold()
+            Style::default().fg(colors.accent_bright).bold()
         } else if raw_unavailable {
-            Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM)
+            Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM)
         } else {
-            Style::default().fg(FG_SECONDARY)
+            Style::default().fg(colors.fg_secondary)
         };
 
         let value = if is_editing {
-            format!("{}▌", app.packet_editor.field_buffer)
+            format!("{}|", app.packet_editor.field_buffer)
         } else {
             get_field_value(app, field)
         };
 
         let value_style = if is_editing {
-            Style::default().fg(WARNING).add_modifier(Modifier::BOLD)
+            Style::default().fg(colors.warning).add_modifier(Modifier::BOLD)
         } else if is_selected {
             if raw_unavailable {
-                Style::default().fg(WARNING)  // Orange/warning for unavailable raw fields
+                Style::default().fg(colors.warning)
             } else {
-                Style::default().fg(ACCENT_BRIGHT)
+                Style::default().fg(colors.accent_bright)
             }
         } else if raw_unavailable {
-            Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM)
+            Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM)
         } else {
-            Style::default().fg(FG_PRIMARY)
+            Style::default().fg(colors.fg_primary)
         };
 
         // Show lock indicator for raw socket fields when not available
         let indicator = if is_selected {
             if raw_unavailable { "! " } else { "> " }
         } else if raw_unavailable {
-            "# "  // Hash for locked/unavailable
+            "# "
         } else {
             "  "
         };
         let indicator_style = if is_selected {
             if raw_unavailable {
-                Style::default().fg(WARNING)
+                Style::default().fg(colors.warning)
             } else {
-                Style::default().fg(ACCENT_BRIGHT)
+                Style::default().fg(colors.accent_bright)
             }
         } else if raw_unavailable {
-            Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM)
+            Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM)
         } else {
-            Style::default().fg(BG_COLOR)
+            Style::default().fg(colors.bg)
         };
 
         Row::new(vec![
@@ -288,35 +295,36 @@ fn dhcp_type_name(t: u8) -> &'static str {
 
 /// Render help text at the bottom
 fn render_help_text(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let has_raw_socket = crate::network::raw_socket::get_cached_availability().unwrap_or(false);
     let current_requires_raw = app.packet_editor.current_field.requires_raw_socket();
     let show_raw_warning = current_requires_raw && !has_raw_socket;
 
     let help_text = if app.packet_editor.editing {
         Line::from(vec![
-            Span::styled("Enter", Style::default().fg(ACCENT)),
-            Span::styled(" save  ", Style::default().fg(FG_DIM)),
-            Span::styled("Esc", Style::default().fg(ACCENT)),
-            Span::styled(" cancel", Style::default().fg(FG_DIM)),
+            Span::styled("Enter", Style::default().fg(colors.accent)),
+            Span::styled(" save  ", Style::default().fg(colors.fg_dim)),
+            Span::styled("Esc", Style::default().fg(colors.accent)),
+            Span::styled(" cancel", Style::default().fg(colors.fg_dim)),
         ])
     } else if show_raw_warning {
         // Show raw socket warning with command
         Line::from(vec![
-            Span::styled("! ", Style::default().fg(WARNING)),
-            Span::styled("Requires CAP_NET_RAW: ", Style::default().fg(WARNING)),
-            Span::styled("sudo setcap cap_net_raw+ep ", Style::default().fg(ACCENT)),
-            Span::styled("<binary>", Style::default().fg(ACCENT).add_modifier(Modifier::DIM)),
+            Span::styled("! ", Style::default().fg(colors.warning)),
+            Span::styled("Requires CAP_NET_RAW: ", Style::default().fg(colors.warning)),
+            Span::styled("sudo setcap cap_net_raw+ep ", Style::default().fg(colors.accent)),
+            Span::styled("<binary>", Style::default().fg(colors.accent).add_modifier(Modifier::DIM)),
         ])
     } else {
         Line::from(vec![
-            Span::styled("j/k", Style::default().fg(ACCENT)),
-            Span::styled(" navigate  ", Style::default().fg(FG_DIM)),
-            Span::styled("Enter/i", Style::default().fg(ACCENT)),
-            Span::styled(" edit  ", Style::default().fg(FG_DIM)),
-            Span::styled("r", Style::default().fg(ACCENT)),
-            Span::styled(" randomize  ", Style::default().fg(FG_DIM)),
-            Span::styled("Esc/q", Style::default().fg(ACCENT)),
-            Span::styled(" close", Style::default().fg(FG_DIM)),
+            Span::styled("j/k", Style::default().fg(colors.accent)),
+            Span::styled(" navigate  ", Style::default().fg(colors.fg_dim)),
+            Span::styled("Enter/i", Style::default().fg(colors.accent)),
+            Span::styled(" edit  ", Style::default().fg(colors.fg_dim)),
+            Span::styled("r", Style::default().fg(colors.accent)),
+            Span::styled(" randomize  ", Style::default().fg(colors.fg_dim)),
+            Span::styled("Esc/q", Style::default().fg(colors.accent)),
+            Span::styled(" close", Style::default().fg(colors.fg_dim)),
         ])
     };
 

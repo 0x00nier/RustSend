@@ -3,6 +3,7 @@
 //! Provides contextual help based on current mode and pending keys
 
 use crate::app::App;
+use crate::ui::theme::ThemeColors;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
@@ -10,14 +11,6 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap},
     Frame,
 };
-
-// Color scheme: minimal dark with neon green accents
-const BG_COLOR: Color = Color::Rgb(0, 0, 0);            // True black
-const FG_PRIMARY: Color = Color::White;
-const FG_SECONDARY: Color = Color::Rgb(128, 128, 128);
-const FG_DIM: Color = Color::Rgb(60, 60, 60);
-const ACCENT: Color = Color::Rgb(80, 200, 100);
-const ACCENT_BRIGHT: Color = Color::Rgb(100, 255, 120);
 
 /// Help entry structure
 pub struct HelpEntry {
@@ -34,6 +27,7 @@ pub enum HelpCategory {
     Protocols,
     ScanTypes,
     Commands,
+    Repeater,
 }
 
 impl HelpCategory {
@@ -45,12 +39,13 @@ impl HelpCategory {
             HelpCategory::Protocols => "Protocols",
             HelpCategory::ScanTypes => "Scan Types",
             HelpCategory::Commands => "Commands",
+            HelpCategory::Repeater => "Repeater",
         }
     }
 
-    pub fn color(&self) -> Color {
-        // All categories use the green accent for consistency
-        ACCENT
+    pub fn color(&self, colors: &ThemeColors) -> Color {
+        // All categories use the accent color for consistency
+        colors.accent
     }
 }
 
@@ -177,6 +172,21 @@ fn get_help_entries() -> Vec<HelpEntry> {
         HelpEntry {
             key: "P",
             description: "Protocol picker",
+            category: HelpCategory::Actions,
+        },
+        HelpEntry {
+            key: "R",
+            description: "Open repeater",
+            category: HelpCategory::Actions,
+        },
+        HelpEntry {
+            key: "S",
+            description: "Send to repeater",
+            category: HelpCategory::Actions,
+        },
+        HelpEntry {
+            key: "T",
+            description: "Template picker",
             category: HelpCategory::Actions,
         },
         HelpEntry {
@@ -363,11 +373,48 @@ fn get_help_entries() -> Vec<HelpEntry> {
             description: "Randomize seq number",
             category: HelpCategory::Commands,
         },
+        // Repeater (inside repeater view)
+        HelpEntry {
+            key: "j/k",
+            description: "Navigate entries",
+            category: HelpCategory::Repeater,
+        },
+        HelpEntry {
+            key: "Tab",
+            description: "Switch pane",
+            category: HelpCategory::Repeater,
+        },
+        HelpEntry {
+            key: "r/Enter",
+            description: "Resend request",
+            category: HelpCategory::Repeater,
+        },
+        HelpEntry {
+            key: "n",
+            description: "New from config",
+            category: HelpCategory::Repeater,
+        },
+        HelpEntry {
+            key: "d",
+            description: "Delete entry",
+            category: HelpCategory::Repeater,
+        },
+        HelpEntry {
+            key: "g/G",
+            description: "Top / Bottom",
+            category: HelpCategory::Repeater,
+        },
+        HelpEntry {
+            key: "q/Esc",
+            description: "Close repeater",
+            category: HelpCategory::Repeater,
+        },
     ]
 }
 
 /// Render the help popup (which-key style)
 pub fn render_help_popup(frame: &mut Frame, app: &App) {
+    let colors = app.current_theme.colors();
     let area = frame.area();
 
     // Calculate popup size (80% of screen, max 100x40)
@@ -382,12 +429,12 @@ pub fn render_help_popup(frame: &mut Frame, app: &App) {
     // Create main block
     let block = Block::default()
         .title(" Keybindings ")
-        .title_style(Style::default().fg(ACCENT_BRIGHT).bold())
+        .title_style(Style::default().fg(colors.accent_bright).bold())
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG_COLOR))
+        .border_style(Style::default().fg(colors.accent))
+        .style(Style::default().bg(colors.bg))
         .padding(Padding::uniform(1));
 
     let inner = block.inner(popup_area);
@@ -415,6 +462,7 @@ pub fn render_help_popup(frame: &mut Frame, app: &App) {
         &entries,
         &[HelpCategory::Navigation, HelpCategory::Actions],
         filter,
+        &colors,
     );
 
     // Column 2: Modes + Protocols
@@ -424,15 +472,17 @@ pub fn render_help_popup(frame: &mut Frame, app: &App) {
         &entries,
         &[HelpCategory::Modes, HelpCategory::Protocols],
         filter,
+        &colors,
     );
 
-    // Column 3: Scan Types + Commands
+    // Column 3: Scan Types + Commands + Repeater
     render_help_column(
         frame,
         columns[2],
         &entries,
-        &[HelpCategory::ScanTypes, HelpCategory::Commands],
+        &[HelpCategory::ScanTypes, HelpCategory::Commands, HelpCategory::Repeater],
         filter,
+        &colors,
     );
 }
 
@@ -443,6 +493,7 @@ fn render_help_column(
     entries: &[HelpEntry],
     categories: &[HelpCategory],
     filter: &str,
+    colors: &ThemeColors,
 ) {
     let mut lines: Vec<Line> = Vec::new();
 
@@ -466,9 +517,9 @@ fn render_help_column(
         // Category header
         lines.push(Line::from(vec![
             Span::styled(
-                format!("━━ {} ━━", category.name()),
+                format!("-- {} --", category.name()),
                 Style::default()
-                    .fg(category.color())
+                    .fg(category.color(colors))
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
@@ -478,9 +529,9 @@ fn render_help_column(
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{:14}", entry.key),
-                    Style::default().fg(ACCENT_BRIGHT),
+                    Style::default().fg(colors.accent_bright),
                 ),
-                Span::styled(entry.description, Style::default().fg(FG_PRIMARY)),
+                Span::styled(entry.description, Style::default().fg(colors.fg_primary)),
             ]));
         }
     }
@@ -495,6 +546,7 @@ pub fn render_key_hint(frame: &mut Frame, app: &App) {
         return;
     }
 
+    let colors = app.current_theme.colors();
     let pending: String = app.pending_keys.iter().collect();
     let area = frame.area();
 
@@ -512,8 +564,8 @@ pub fn render_key_hint(frame: &mut Frame, app: &App) {
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Pending: ", Style::default().fg(FG_SECONDARY)),
-            Span::styled(&pending, Style::default().fg(ACCENT_BRIGHT).bold()),
+            Span::styled("Pending: ", Style::default().fg(colors.fg_secondary)),
+            Span::styled(&pending, Style::default().fg(colors.accent_bright).bold()),
         ]),
         Line::from(""),
     ];
@@ -522,29 +574,29 @@ pub fn render_key_hint(frame: &mut Frame, app: &App) {
     match pending.as_str() {
         "g" => {
             lines.push(Line::from(vec![
-                Span::styled("g", Style::default().fg(ACCENT_BRIGHT)),
-                Span::styled(" → Go to top", Style::default().fg(FG_PRIMARY)),
+                Span::styled("g", Style::default().fg(colors.accent_bright)),
+                Span::styled(" -> Go to top", Style::default().fg(colors.fg_primary)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Press ", Style::default().fg(FG_DIM)),
-                Span::styled("Esc", Style::default().fg(FG_SECONDARY)),
-                Span::styled(" to cancel", Style::default().fg(FG_DIM)),
+                Span::styled("Press ", Style::default().fg(colors.fg_dim)),
+                Span::styled("Esc", Style::default().fg(colors.fg_secondary)),
+                Span::styled(" to cancel", Style::default().fg(colors.fg_dim)),
             ]));
         }
         _ => {
             lines.push(Line::from(vec![
-                Span::styled("Unknown sequence", Style::default().fg(FG_DIM)),
+                Span::styled("Unknown sequence", Style::default().fg(colors.fg_dim)),
             ]));
         }
     }
 
     let block = Block::default()
         .title(" Which Key? ")
-        .title_style(Style::default().fg(ACCENT))
+        .title_style(Style::default().fg(colors.accent))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG_COLOR));
+        .border_style(Style::default().fg(colors.accent))
+        .style(Style::default().bg(colors.bg));
 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, popup_area);

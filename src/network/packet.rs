@@ -11,6 +11,111 @@ use pnet::packet::udp::{self, MutableUdpPacket};
 use std::net::{IpAddr, Ipv4Addr};
 use thiserror::Error;
 
+/// TCP Options per RFC 793/7323
+/// These options are placed in the TCP header after the standard 20 bytes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TcpOption {
+    /// End of options list (Kind=0)
+    End,
+    /// No-operation padding (Kind=1)
+    Nop,
+    /// Maximum Segment Size (Kind=2, Length=4)
+    /// Used during connection setup to specify max segment size
+    Mss(u16),
+    /// Window Scale factor (Kind=3, Length=3)
+    /// Allows window sizes larger than 64KB (shift count 0-14)
+    WindowScale(u8),
+    /// SACK Permitted (Kind=4, Length=2)
+    /// Indicates selective acknowledgment support
+    SackPermitted,
+    /// Selective Acknowledgment (Kind=5, Length=variable)
+    /// Contains blocks of (left_edge, right_edge) for out-of-order data
+    Sack(Vec<(u32, u32)>),
+    /// Timestamps (Kind=8, Length=10)
+    /// Used for RTT calculation and PAWS (Protection Against Wrapped Sequences)
+    Timestamps {
+        /// Timestamp value (sender's timestamp)
+        tsval: u32,
+        /// Timestamp echo reply (echoed from peer)
+        tsecr: u32,
+    },
+}
+
+impl TcpOption {
+    /// Get the kind byte for this option
+    pub fn kind(&self) -> u8 {
+        match self {
+            TcpOption::End => 0,
+            TcpOption::Nop => 1,
+            TcpOption::Mss(_) => 2,
+            TcpOption::WindowScale(_) => 3,
+            TcpOption::SackPermitted => 4,
+            TcpOption::Sack(_) => 5,
+            TcpOption::Timestamps { .. } => 8,
+        }
+    }
+
+    /// Get the display name for this option
+    pub fn name(&self) -> &'static str {
+        match self {
+            TcpOption::End => "End",
+            TcpOption::Nop => "NOP",
+            TcpOption::Mss(_) => "MSS",
+            TcpOption::WindowScale(_) => "Window Scale",
+            TcpOption::SackPermitted => "SACK Permitted",
+            TcpOption::Sack(_) => "SACK",
+            TcpOption::Timestamps { .. } => "Timestamps",
+        }
+    }
+
+    /// Encode this option to bytes
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            TcpOption::End => vec![0],
+            TcpOption::Nop => vec![1],
+            TcpOption::Mss(mss) => {
+                let mut bytes = vec![2, 4];
+                bytes.extend_from_slice(&mss.to_be_bytes());
+                bytes
+            }
+            TcpOption::WindowScale(shift) => vec![3, 3, *shift],
+            TcpOption::SackPermitted => vec![4, 2],
+            TcpOption::Sack(blocks) => {
+                let mut bytes = vec![5, 2 + (blocks.len() * 8) as u8];
+                for (left, right) in blocks {
+                    bytes.extend_from_slice(&left.to_be_bytes());
+                    bytes.extend_from_slice(&right.to_be_bytes());
+                }
+                bytes
+            }
+            TcpOption::Timestamps { tsval, tsecr } => {
+                let mut bytes = vec![8, 10];
+                bytes.extend_from_slice(&tsval.to_be_bytes());
+                bytes.extend_from_slice(&tsecr.to_be_bytes());
+                bytes
+            }
+        }
+    }
+
+    /// Get all standard option types for display
+    pub fn all_types() -> Vec<&'static str> {
+        vec!["MSS", "Window Scale", "SACK Permitted", "Timestamps"]
+    }
+}
+
+/// Encode a list of TCP options to bytes, padded to 4-byte boundary
+pub fn encode_tcp_options(options: &[TcpOption]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for opt in options {
+        bytes.extend(opt.encode());
+    }
+    // Pad to 4-byte boundary with NOPs
+    while bytes.len() % 4 != 0 {
+        bytes.push(1); // NOP padding
+    }
+    bytes
+}
+
 #[derive(Error, Debug)]
 pub enum PacketError {
     #[error("Invalid packet size: expected at least {expected} bytes, got {actual}")]
@@ -156,6 +261,15 @@ pub struct TcpPacketBuilder {
     urgent_ptr: u16,
     payload: Vec<u8>,
     ttl: u8,
+    // IP fragmentation fields (RFC 791)
+    ip_flags: u8,           // Bit 1: DF (Don't Fragment), Bit 2: MF (More Fragments)
+    fragment_offset: u16,   // Fragment offset in 8-byte units (13 bits, max 8191)
+    ip_id: u16,             // Identification for fragment reassembly
+    // IP header extensions
+    dscp: u8,               // Differentiated Services Code Point (6 bits)
+    ecn: u8,                // Explicit Congestion Notification (2 bits)
+    // TCP Options (RFC 793/7323)
+    tcp_options: Vec<TcpOption>,
 }
 
 impl TcpPacketBuilder {
@@ -172,6 +286,12 @@ impl TcpPacketBuilder {
             urgent_ptr: 0,
             payload: Vec::new(),
             ttl: 64,
+            ip_flags: 0,
+            fragment_offset: 0,
+            ip_id: rand::random(),
+            dscp: 0,
+            ecn: 0,
+            tcp_options: Vec::new(),
         }
     }
 
@@ -270,10 +390,89 @@ impl TcpPacketBuilder {
         self
     }
 
+    /// Set IP flags (RFC 791: Bit 1 = DF, Bit 2 = MF)
+    pub fn ip_flags(mut self, flags: u8) -> Self {
+        self.ip_flags = flags & 0x07; // Only 3 bits valid
+        self
+    }
+
+    /// Set Don't Fragment flag
+    pub fn dont_fragment(mut self) -> Self {
+        self.ip_flags |= 0x02;
+        self
+    }
+
+    /// Set More Fragments flag
+    pub fn more_fragments(mut self) -> Self {
+        self.ip_flags |= 0x01;
+        self
+    }
+
+    /// Set fragment offset (in 8-byte units, max 8191)
+    pub fn fragment_offset(mut self, offset: u16) -> Self {
+        self.fragment_offset = offset & 0x1FFF; // 13 bits max
+        self
+    }
+
+    /// Set IP identification for fragment reassembly
+    pub fn ip_id(mut self, id: u16) -> Self {
+        self.ip_id = id;
+        self
+    }
+
+    /// Set DSCP (Differentiated Services Code Point, 6 bits)
+    pub fn dscp(mut self, dscp: u8) -> Self {
+        self.dscp = dscp & 0x3F; // 6 bits
+        self
+    }
+
+    /// Set ECN (Explicit Congestion Notification, 2 bits)
+    pub fn ecn(mut self, ecn: u8) -> Self {
+        self.ecn = ecn & 0x03; // 2 bits
+        self
+    }
+
+    /// Set TCP options (RFC 793/7323)
+    pub fn tcp_options(mut self, options: Vec<TcpOption>) -> Self {
+        self.tcp_options = options;
+        self
+    }
+
+    /// Add a single TCP option
+    pub fn add_tcp_option(mut self, option: TcpOption) -> Self {
+        self.tcp_options.push(option);
+        self
+    }
+
+    /// Set common SYN options (MSS, Window Scale, SACK Permitted, Timestamps)
+    pub fn syn_options(mut self, mss: u16, window_scale: u8, tsval: u32) -> Self {
+        self.tcp_options = vec![
+            TcpOption::Mss(mss),
+            TcpOption::WindowScale(window_scale),
+            TcpOption::SackPermitted,
+            TcpOption::Timestamps { tsval, tsecr: 0 },
+        ];
+        self
+    }
+
     /// Build the TCP packet with IP header
     pub fn build(&self) -> Result<Vec<u8>, PacketError> {
-        let tcp_len = 20 + self.payload.len(); // TCP header + payload
-        let ip_len = 20 + tcp_len; // IP header + TCP
+        // Encode TCP options and calculate header length
+        let options_bytes = encode_tcp_options(&self.tcp_options);
+        let options_len = options_bytes.len();
+        let tcp_header_len = 20 + options_len; // Base TCP header + options
+        let data_offset = (tcp_header_len / 4) as u8; // Data offset in 32-bit words
+
+        // Validate data offset (must be 5-15)
+        if data_offset < 5 || data_offset > 15 {
+            return Err(PacketError::build_error("TCP", format!(
+                "Invalid data offset {}: TCP options too large ({} bytes)",
+                data_offset, options_len
+            )));
+        }
+
+        let tcp_total_len = tcp_header_len + self.payload.len(); // TCP header + options + payload
+        let ip_len = 20 + tcp_total_len; // IP header + TCP
 
         let mut buffer = vec![0u8; ip_len];
 
@@ -284,12 +483,12 @@ impl TcpPacketBuilder {
 
             ip_packet.set_version(4);
             ip_packet.set_header_length(5);
-            ip_packet.set_dscp(0);
-            ip_packet.set_ecn(0);
+            ip_packet.set_dscp(self.dscp);
+            ip_packet.set_ecn(self.ecn);
             ip_packet.set_total_length(ip_len as u16);
-            ip_packet.set_identification(rand::random());
-            ip_packet.set_flags(0);
-            ip_packet.set_fragment_offset(0);
+            ip_packet.set_identification(self.ip_id);
+            ip_packet.set_flags(self.ip_flags);
+            ip_packet.set_fragment_offset(self.fragment_offset);
             ip_packet.set_ttl(self.ttl);
             ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Tcp);
             ip_packet.set_source(self.source_ip);
@@ -299,7 +498,7 @@ impl TcpPacketBuilder {
             ip_packet.set_checksum(checksum);
         }
 
-        // Build TCP header
+        // Build TCP header with options
         {
             let mut tcp_packet = MutableTcpPacket::new(&mut buffer[20..])
                 .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP header"))?;
@@ -308,15 +507,28 @@ impl TcpPacketBuilder {
             tcp_packet.set_destination(self.dest_port);
             tcp_packet.set_sequence(self.seq_num);
             tcp_packet.set_acknowledgement(self.ack_num);
-            tcp_packet.set_data_offset(5);
+            tcp_packet.set_data_offset(data_offset);
             tcp_packet.set_reserved(0);
             tcp_packet.set_flags(self.flags);
             tcp_packet.set_window(self.window);
             tcp_packet.set_urgent_ptr(self.urgent_ptr);
-            tcp_packet.set_payload(&self.payload);
 
+            // Write options bytes directly after the 20-byte TCP header
+            // pnet's set_options expects pnet::TcpOption, so we write raw bytes
+            if !options_bytes.is_empty() {
+                buffer[40..40 + options_len].copy_from_slice(&options_bytes);
+            }
+
+            // Write payload after options
+            let payload_start = 40 + options_len;
+            buffer[payload_start..payload_start + self.payload.len()].copy_from_slice(&self.payload);
+
+            // Recalculate checksum with the full TCP segment (header + options + payload)
+            let tcp_packet = MutableTcpPacket::new(&mut buffer[20..])
+                .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP checksum"))?;
             let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &self.source_ip, &self.dest_ip);
-            tcp_packet.set_checksum(checksum);
+            // Write checksum at offset 16-17 in TCP header (bytes 36-37 in full packet)
+            buffer[36..38].copy_from_slice(&checksum.to_be_bytes());
         }
 
         Ok(buffer)
@@ -324,7 +536,9 @@ impl TcpPacketBuilder {
 
     /// Build just the TCP segment (without IP header)
     pub fn build_segment(&self) -> Result<Vec<u8>, PacketError> {
-        let tcp_len = 20 + self.payload.len();
+        let options_bytes = encode_tcp_options(&self.tcp_options);
+        let tcp_header_len = 20 + options_bytes.len();
+        let tcp_len = tcp_header_len + self.payload.len();
         let mut buffer = vec![0u8; tcp_len];
         self.build_segment_into(&mut buffer)?;
         Ok(buffer)
@@ -333,28 +547,46 @@ impl TcpPacketBuilder {
     /// Build TCP segment into an existing buffer
     /// Returns an error if the buffer is too small
     pub fn build_segment_into(&self, buffer: &mut [u8]) -> Result<usize, PacketError> {
-        let tcp_len = 20 + self.payload.len();
+        let options_bytes = encode_tcp_options(&self.tcp_options);
+        let options_len = options_bytes.len();
+        let tcp_header_len = 20 + options_len;
+        let data_offset = (tcp_header_len / 4) as u8;
+        let tcp_len = tcp_header_len + self.payload.len();
 
         if buffer.len() < tcp_len {
             return Err(PacketError::buffer_too_small(tcp_len, buffer.len()));
         }
 
-        let mut tcp_packet = MutableTcpPacket::new(buffer)
-            .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP header"))?;
+        {
+            let mut tcp_packet = MutableTcpPacket::new(buffer)
+                .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP header"))?;
 
-        tcp_packet.set_source(self.source_port);
-        tcp_packet.set_destination(self.dest_port);
-        tcp_packet.set_sequence(self.seq_num);
-        tcp_packet.set_acknowledgement(self.ack_num);
-        tcp_packet.set_data_offset(5);
-        tcp_packet.set_reserved(0);
-        tcp_packet.set_flags(self.flags);
-        tcp_packet.set_window(self.window);
-        tcp_packet.set_urgent_ptr(self.urgent_ptr);
-        tcp_packet.set_payload(&self.payload);
+            tcp_packet.set_source(self.source_port);
+            tcp_packet.set_destination(self.dest_port);
+            tcp_packet.set_sequence(self.seq_num);
+            tcp_packet.set_acknowledgement(self.ack_num);
+            tcp_packet.set_data_offset(data_offset);
+            tcp_packet.set_reserved(0);
+            tcp_packet.set_flags(self.flags);
+            tcp_packet.set_window(self.window);
+            tcp_packet.set_urgent_ptr(self.urgent_ptr);
+        }
 
+        // Write options bytes directly after the 20-byte TCP header
+        if !options_bytes.is_empty() {
+            buffer[20..20 + options_len].copy_from_slice(&options_bytes);
+        }
+
+        // Write payload after options
+        let payload_start = 20 + options_len;
+        buffer[payload_start..payload_start + self.payload.len()].copy_from_slice(&self.payload);
+
+        // Recalculate checksum with the full TCP segment
+        let tcp_packet = MutableTcpPacket::new(buffer)
+            .ok_or_else(|| PacketError::build_error("TCP", "Buffer too small for TCP checksum"))?;
         let checksum = tcp::ipv4_checksum(&tcp_packet.to_immutable(), &self.source_ip, &self.dest_ip);
-        tcp_packet.set_checksum(checksum);
+        // Write checksum at offset 16-17 in TCP header
+        buffer[16..18].copy_from_slice(&checksum.to_be_bytes());
 
         Ok(tcp_len)
     }
@@ -375,6 +607,12 @@ pub struct UdpPacketBuilder {
     dest_port: u16,
     payload: Vec<u8>,
     ttl: u8,
+    // IP fragmentation fields (RFC 791)
+    ip_flags: u8,
+    fragment_offset: u16,
+    ip_id: u16,
+    dscp: u8,
+    ecn: u8,
 }
 
 impl UdpPacketBuilder {
@@ -386,6 +624,11 @@ impl UdpPacketBuilder {
             dest_port: 53,
             payload: Vec::new(),
             ttl: 64,
+            ip_flags: 0,
+            fragment_offset: 0,
+            ip_id: rand::random(),
+            dscp: 0,
+            ecn: 0,
         }
     }
 
@@ -419,6 +662,48 @@ impl UdpPacketBuilder {
         self
     }
 
+    /// Set IP flags (RFC 791: Bit 1 = DF, Bit 2 = MF)
+    pub fn ip_flags(mut self, flags: u8) -> Self {
+        self.ip_flags = flags & 0x07;
+        self
+    }
+
+    /// Set Don't Fragment flag
+    pub fn dont_fragment(mut self) -> Self {
+        self.ip_flags |= 0x02;
+        self
+    }
+
+    /// Set More Fragments flag
+    pub fn more_fragments(mut self) -> Self {
+        self.ip_flags |= 0x01;
+        self
+    }
+
+    /// Set fragment offset (in 8-byte units, max 8191)
+    pub fn fragment_offset(mut self, offset: u16) -> Self {
+        self.fragment_offset = offset & 0x1FFF;
+        self
+    }
+
+    /// Set IP identification for fragment reassembly
+    pub fn ip_id(mut self, id: u16) -> Self {
+        self.ip_id = id;
+        self
+    }
+
+    /// Set DSCP (6 bits)
+    pub fn dscp(mut self, dscp: u8) -> Self {
+        self.dscp = dscp & 0x3F;
+        self
+    }
+
+    /// Set ECN (2 bits)
+    pub fn ecn(mut self, ecn: u8) -> Self {
+        self.ecn = ecn & 0x03;
+        self
+    }
+
     /// Build UDP packet with IP header
     pub fn build(&self) -> Result<Vec<u8>, PacketError> {
         let udp_len = 8 + self.payload.len(); // UDP header + payload
@@ -433,12 +718,12 @@ impl UdpPacketBuilder {
 
             ip_packet.set_version(4);
             ip_packet.set_header_length(5);
-            ip_packet.set_dscp(0);
-            ip_packet.set_ecn(0);
+            ip_packet.set_dscp(self.dscp);
+            ip_packet.set_ecn(self.ecn);
             ip_packet.set_total_length(ip_len as u16);
-            ip_packet.set_identification(rand::random());
-            ip_packet.set_flags(0);
-            ip_packet.set_fragment_offset(0);
+            ip_packet.set_identification(self.ip_id);
+            ip_packet.set_flags(self.ip_flags);
+            ip_packet.set_fragment_offset(self.fragment_offset);
             ip_packet.set_ttl(self.ttl);
             ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Udp);
             ip_packet.set_source(self.source_ip);
@@ -483,6 +768,12 @@ pub struct IcmpPacketBuilder {
     sequence: u16,
     payload: Vec<u8>,
     ttl: u8,
+    // IP fragmentation fields (RFC 791)
+    ip_flags: u8,
+    fragment_offset: u16,
+    ip_id: u16,
+    dscp: u8,
+    ecn: u8,
 }
 
 impl IcmpPacketBuilder {
@@ -496,6 +787,11 @@ impl IcmpPacketBuilder {
             sequence: 1,
             payload: Vec::new(),
             ttl: 64,
+            ip_flags: 0,
+            fragment_offset: 0,
+            ip_id: rand::random(),
+            dscp: 0,
+            ecn: 0,
         }
     }
 
@@ -551,6 +847,48 @@ impl IcmpPacketBuilder {
         self
     }
 
+    /// Set IP flags (RFC 791: Bit 1 = DF, Bit 2 = MF)
+    pub fn ip_flags(mut self, flags: u8) -> Self {
+        self.ip_flags = flags & 0x07;
+        self
+    }
+
+    /// Set Don't Fragment flag
+    pub fn dont_fragment(mut self) -> Self {
+        self.ip_flags |= 0x02;
+        self
+    }
+
+    /// Set More Fragments flag
+    pub fn more_fragments(mut self) -> Self {
+        self.ip_flags |= 0x01;
+        self
+    }
+
+    /// Set fragment offset (in 8-byte units, max 8191)
+    pub fn fragment_offset(mut self, offset: u16) -> Self {
+        self.fragment_offset = offset & 0x1FFF;
+        self
+    }
+
+    /// Set IP identification for fragment reassembly
+    pub fn ip_id(mut self, id: u16) -> Self {
+        self.ip_id = id;
+        self
+    }
+
+    /// Set DSCP (6 bits)
+    pub fn dscp(mut self, dscp: u8) -> Self {
+        self.dscp = dscp & 0x3F;
+        self
+    }
+
+    /// Set ECN (2 bits)
+    pub fn ecn(mut self, ecn: u8) -> Self {
+        self.ecn = ecn & 0x03;
+        self
+    }
+
     /// Build ICMP packet with IP header
     pub fn build(&self) -> Result<Vec<u8>, PacketError> {
         let icmp_len = 8 + self.payload.len(); // ICMP header + payload
@@ -565,12 +903,12 @@ impl IcmpPacketBuilder {
 
             ip_packet.set_version(4);
             ip_packet.set_header_length(5);
-            ip_packet.set_dscp(0);
-            ip_packet.set_ecn(0);
+            ip_packet.set_dscp(self.dscp);
+            ip_packet.set_ecn(self.ecn);
             ip_packet.set_total_length(ip_len as u16);
-            ip_packet.set_identification(rand::random());
-            ip_packet.set_flags(0);
-            ip_packet.set_fragment_offset(0);
+            ip_packet.set_identification(self.ip_id);
+            ip_packet.set_flags(self.ip_flags);
+            ip_packet.set_fragment_offset(self.fragment_offset);
             ip_packet.set_ttl(self.ttl);
             ip_packet.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
             ip_packet.set_source(self.source_ip);
@@ -886,5 +1224,147 @@ mod tests {
         let result = builder.build_segment_into(&mut adequate_buffer);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 20);
+    }
+
+    #[test]
+    fn test_tcp_ip_fragmentation_fields() {
+        let packet = TcpPacketBuilder::new()
+            .source_ip(Ipv4Addr::new(192, 168, 1, 1))
+            .dest_ip(Ipv4Addr::new(192, 168, 1, 2))
+            .source_port(12345)
+            .dest_port(80)
+            .syn()
+            .ip_flags(0x02)  // DF flag
+            .ip_id(0x1234)
+            .fragment_offset(0)
+            .dscp(46)        // EF DSCP
+            .ecn(0x01)       // ECT(1)
+            .dont_fragment()
+            .build()
+            .unwrap();
+
+        assert!(!packet.is_empty());
+        // IP flags are at offset 6 (upper 3 bits)
+        assert_eq!(packet[6] >> 5, 0x02); // DF flag set
+    }
+
+    #[test]
+    fn test_tcp_more_fragments_flag() {
+        let packet = TcpPacketBuilder::new()
+            .source_ip(Ipv4Addr::new(10, 0, 0, 1))
+            .dest_ip(Ipv4Addr::new(10, 0, 0, 2))
+            .source_port(1234)
+            .dest_port(443)
+            .syn()
+            .more_fragments()
+            .fragment_offset(185)  // 185 * 8 = 1480 bytes offset
+            .ip_id(0xABCD)
+            .build()
+            .unwrap();
+
+        assert!(!packet.is_empty());
+    }
+
+    #[test]
+    fn test_udp_ip_fragmentation_fields() {
+        let packet = UdpPacketBuilder::new()
+            .source_ip(Ipv4Addr::new(192, 168, 1, 1))
+            .dest_ip(Ipv4Addr::new(192, 168, 1, 2))
+            .source_port(12345)
+            .dest_port(53)
+            .payload(b"test".to_vec())
+            .ip_flags(0x02)
+            .ip_id(0x5678)
+            .fragment_offset(0)
+            .dscp(0)
+            .ecn(0)
+            .dont_fragment()
+            .more_fragments()
+            .build()
+            .unwrap();
+
+        assert!(!packet.is_empty());
+    }
+
+    #[test]
+    fn test_icmp_ip_fragmentation_fields() {
+        let packet = IcmpPacketBuilder::new()
+            .source_ip(Ipv4Addr::new(192, 168, 1, 1))
+            .dest_ip(Ipv4Addr::new(192, 168, 1, 2))
+            .echo_request()
+            .ip_flags(0x00)
+            .ip_id(0x9ABC)
+            .fragment_offset(0)
+            .dscp(0)
+            .ecn(0)
+            .dont_fragment()
+            .more_fragments()
+            .build()
+            .unwrap();
+
+        assert!(!packet.is_empty());
+    }
+
+    #[test]
+    fn test_tcp_option_encoding() {
+        // Test MSS
+        let mss = TcpOption::Mss(1460);
+        assert_eq!(mss.kind(), 2);
+        assert_eq!(mss.name(), "MSS");
+        let encoded = mss.encode();
+        assert_eq!(encoded, vec![2, 4, 0x05, 0xB4]); // 1460 = 0x05B4
+
+        // Test Window Scale
+        let ws = TcpOption::WindowScale(7);
+        assert_eq!(ws.kind(), 3);
+        assert_eq!(ws.name(), "Window Scale");
+        let encoded = ws.encode();
+        assert_eq!(encoded, vec![3, 3, 7]);
+
+        // Test SACK Permitted
+        let sack_perm = TcpOption::SackPermitted;
+        assert_eq!(sack_perm.kind(), 4);
+        assert_eq!(sack_perm.name(), "SACK Permitted");
+        let encoded = sack_perm.encode();
+        assert_eq!(encoded, vec![4, 2]);
+
+        // Test Timestamps
+        let ts = TcpOption::Timestamps { tsval: 123456, tsecr: 654321 };
+        assert_eq!(ts.kind(), 8);
+        assert_eq!(ts.name(), "Timestamps");
+        let encoded = ts.encode();
+        assert_eq!(encoded.len(), 10);
+
+        // Test NOP and End
+        let nop = TcpOption::Nop;
+        assert_eq!(nop.encode(), vec![1]);
+        let end = TcpOption::End;
+        assert_eq!(end.encode(), vec![0]);
+
+        // Test SACK with blocks
+        let sack = TcpOption::Sack(vec![(1000, 2000), (3000, 4000)]);
+        assert_eq!(sack.kind(), 5);
+        let encoded = sack.encode();
+        assert_eq!(encoded.len(), 2 + 16); // kind + len + 2 blocks * 8 bytes
+    }
+
+    #[test]
+    fn test_encode_tcp_options_with_padding() {
+        let options = vec![
+            TcpOption::Mss(1460),      // 4 bytes
+            TcpOption::WindowScale(7),  // 3 bytes
+        ];
+        let encoded = encode_tcp_options(&options);
+        // Should be padded to 4-byte boundary: 7 bytes -> 8 bytes
+        assert_eq!(encoded.len() % 4, 0);
+    }
+
+    #[test]
+    fn test_tcp_option_all_types() {
+        let types = TcpOption::all_types();
+        assert!(types.contains(&"MSS"));
+        assert!(types.contains(&"Window Scale"));
+        assert!(types.contains(&"SACK Permitted"));
+        assert!(types.contains(&"Timestamps"));
     }
 }

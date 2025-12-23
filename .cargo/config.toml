@@ -1,0 +1,28 @@
+# Cargo configuration for faster builds
+
+[build]
+# Use all available CPU cores for parallel compilation
+jobs = 8
+
+[profile.dev]
+# Optimize dependencies in dev builds for faster iteration
+opt-level = 0
+debug = 0
+incremental = true
+
+[profile.dev.package."*"]
+# Optimize all dependencies even in dev mode (speeds up linking)
+opt-level = 2
+
+[profile.release]
+# Keep release optimizations
+opt-level = 3
+lto = "thin"  # Use thin LTO for faster release builds (vs "fat")
+codegen-units = 16  # More units = faster compilation, slight runtime cost
+incremental = true
+
+# Use mold linker on Linux if available (much faster linking)
+# Uncomment if mold is installed: sudo apt install mold
+# [target.x86_64-unknown-linux-gnu]
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]

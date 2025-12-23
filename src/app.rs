@@ -267,6 +267,14 @@ pub enum PacketEditorField {
     WindowSize,
     UrgentPtr,
 
+    // TCP Options (RFC 793/7323)
+    TcpMss,              // Maximum Segment Size (0 = not included)
+    TcpWindowScale,      // Window Scale shift (255 = not included, 0-14 = shift)
+    TcpSackPermitted,    // SACK Permitted option (yes/no)
+    TcpTimestampsEnabled, // Timestamps option enabled (yes/no)
+    TcpTsVal,            // Timestamp Value
+    TcpTsEcr,            // Timestamp Echo Reply
+
     // ICMP-specific
     IcmpType,
     IcmpCode,
@@ -281,6 +289,9 @@ pub enum PacketEditorField {
     HttpMethod,
     HttpPath,
     HttpHeaders,
+    HttpBody,        // Request body (shown for POST, PUT, PATCH)
+    HttpCookies,     // Cookie header (key=value pairs)
+    HttpContentType, // Content-Type header (shown for POST, PUT, PATCH)
 
     // SNMP-specific
     SnmpVersion,
@@ -327,6 +338,12 @@ impl PacketEditorField {
         Self::SeqNum, Self::AckNum, Self::WindowSize, Self::UrgentPtr,
     ];
 
+    /// TCP Options fields (RFC 793/7323)
+    const TCP_OPTIONS_FIELDS: &'static [Self] = &[
+        Self::TcpMss, Self::TcpWindowScale, Self::TcpSackPermitted,
+        Self::TcpTimestampsEnabled, Self::TcpTsVal, Self::TcpTsEcr,
+    ];
+
     /// UDP header fields
     const UDP_FIELDS: &'static [Self] = &[
         Self::SourcePort, Self::DestPort,
@@ -342,6 +359,7 @@ impl PacketEditorField {
             Protocol::Tcp => {
                 let mut f = Self::IP_FIELDS.to_vec();
                 f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(Self::TCP_OPTIONS_FIELDS);
                 f.push(Self::Payload);
                 f
             }
@@ -365,6 +383,7 @@ impl PacketEditorField {
             Protocol::Http | Protocol::Https => {
                 let mut f = Self::IP_FIELDS.to_vec();
                 f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(Self::TCP_OPTIONS_FIELDS);
                 f.extend_from_slice(&[Self::HttpMethod, Self::HttpPath, Self::HttpHeaders]);
                 f
             }
@@ -372,6 +391,7 @@ impl PacketEditorField {
             Protocol::Smb => {
                 let mut f = Self::IP_FIELDS.to_vec();
                 f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(Self::TCP_OPTIONS_FIELDS);
                 f.push(Self::SmbVersion);
                 f
             }
@@ -379,6 +399,7 @@ impl PacketEditorField {
             Protocol::Ldap => {
                 let mut f = Self::IP_FIELDS.to_vec();
                 f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(Self::TCP_OPTIONS_FIELDS);
                 f.extend_from_slice(&[Self::LdapScope, Self::LdapBaseDn]);
                 f
             }
@@ -386,6 +407,7 @@ impl PacketEditorField {
             Protocol::Kerberos => {
                 let mut f = Self::IP_FIELDS.to_vec();
                 f.extend_from_slice(Self::TCP_FIELDS);
+                f.extend_from_slice(Self::TCP_OPTIONS_FIELDS);
                 f.extend_from_slice(&[Self::KerberosRealm, Self::KerberosUser]);
                 f
             }
@@ -450,6 +472,57 @@ impl PacketEditorField {
         }
     }
 
+    /// Get fields for protocol with context-dependent additions.
+    /// For HTTP, adds body/cookies/content-type when method is POST, PUT, or PATCH.
+    pub fn fields_for_protocol_context(protocol: Protocol, http_method: &str) -> Vec<Self> {
+        let mut fields = Self::fields_for_protocol(protocol);
+
+        // Add context-dependent HTTP fields
+        if matches!(protocol, Protocol::Http | Protocol::Https) {
+            let method_upper = http_method.to_uppercase();
+            if method_upper == "POST" || method_upper == "PUT" || method_upper == "PATCH" {
+                // Insert body-related fields after HttpHeaders
+                if let Some(pos) = fields.iter().position(|f| *f == Self::HttpHeaders) {
+                    // Insert after HttpHeaders: ContentType, Cookies, Body
+                    fields.insert(pos + 1, Self::HttpContentType);
+                    fields.insert(pos + 2, Self::HttpCookies);
+                    fields.insert(pos + 3, Self::HttpBody);
+                } else {
+                    // Fallback: append at end
+                    fields.push(Self::HttpContentType);
+                    fields.push(Self::HttpCookies);
+                    fields.push(Self::HttpBody);
+                }
+            }
+        }
+
+        fields
+    }
+
+    /// Get next field for a given protocol context with HTTP method awareness
+    pub fn next_for_context(&self, protocol: Protocol, http_method: &str) -> Self {
+        let fields = Self::fields_for_protocol_context(protocol, http_method);
+        if let Some(idx) = fields.iter().position(|f| f == self) {
+            fields[(idx + 1) % fields.len()]
+        } else {
+            fields.first().copied().unwrap_or_default()
+        }
+    }
+
+    /// Get previous field for a given protocol context with HTTP method awareness
+    pub fn prev_for_context(&self, protocol: Protocol, http_method: &str) -> Self {
+        let fields = Self::fields_for_protocol_context(protocol, http_method);
+        if let Some(idx) = fields.iter().position(|f| f == self) {
+            if idx == 0 {
+                fields[fields.len() - 1]
+            } else {
+                fields[idx - 1]
+            }
+        } else {
+            fields.first().copied().unwrap_or_default()
+        }
+    }
+
     /// Check if this field requires raw socket privileges (CAP_NET_RAW) to actually work.
     /// These fields can be edited in the UI but won't take effect without elevated privileges.
     pub fn requires_raw_socket(&self) -> bool {
@@ -471,30 +544,6 @@ impl PacketEditorField {
         )
     }
 
-    /// Get next field for a given protocol context
-    pub fn next_for_protocol(&self, protocol: Protocol) -> Self {
-        let fields = Self::fields_for_protocol(protocol);
-        if let Some(idx) = fields.iter().position(|f| f == self) {
-            fields[(idx + 1) % fields.len()]
-        } else {
-            fields.first().copied().unwrap_or_default()
-        }
-    }
-
-    /// Get previous field for a given protocol context
-    pub fn prev_for_protocol(&self, protocol: Protocol) -> Self {
-        let fields = Self::fields_for_protocol(protocol);
-        if let Some(idx) = fields.iter().position(|f| f == self) {
-            if idx == 0 {
-                fields[fields.len() - 1]
-            } else {
-                fields[idx - 1]
-            }
-        } else {
-            fields.first().copied().unwrap_or_default()
-        }
-    }
-
     pub fn label(&self) -> &'static str {
         match self {
             // IP Header
@@ -514,6 +563,13 @@ impl PacketEditorField {
             PacketEditorField::AckNum => "Ack #",
             PacketEditorField::WindowSize => "Window Size",
             PacketEditorField::UrgentPtr => "Urgent Ptr",
+            // TCP Options
+            PacketEditorField::TcpMss => "MSS",
+            PacketEditorField::TcpWindowScale => "Win Scale",
+            PacketEditorField::TcpSackPermitted => "SACK Perm",
+            PacketEditorField::TcpTimestampsEnabled => "Timestamps",
+            PacketEditorField::TcpTsVal => "TS Value",
+            PacketEditorField::TcpTsEcr => "TS Echo",
             // ICMP
             PacketEditorField::IcmpType => "ICMP Type",
             PacketEditorField::IcmpCode => "ICMP Code",
@@ -526,6 +582,9 @@ impl PacketEditorField {
             PacketEditorField::HttpMethod => "Method",
             PacketEditorField::HttpPath => "Path",
             PacketEditorField::HttpHeaders => "Headers",
+            PacketEditorField::HttpBody => "Body",
+            PacketEditorField::HttpCookies => "Cookies",
+            PacketEditorField::HttpContentType => "Content-Type",
             // SNMP
             PacketEditorField::SnmpVersion => "Version",
             PacketEditorField::SnmpCommunity => "Community",
@@ -677,6 +736,40 @@ pub struct PacketEditorState {
     pub urgent_ptr: u16,
 
     // =========================================================================
+    // TCP OPTIONS (RFC 793/7323)
+    // =========================================================================
+
+    /// TCP Maximum Segment Size option (Kind=2).
+    /// 0 = option not included, otherwise the MSS value in bytes.
+    /// Common values: 1460 (Ethernet), 1360 (with options), 536 (minimum).
+    pub tcp_mss: u16,
+
+    /// TCP Window Scale option (Kind=3).
+    /// 255 = option not included, 0-14 = window scale shift count.
+    /// Allows advertised window sizes up to 1GB (shift=14).
+    pub tcp_window_scale: u8,
+
+    /// TCP SACK Permitted option (Kind=4).
+    /// When true, includes the SACK Permitted option in SYN packets.
+    /// Enables selective acknowledgment for better loss recovery.
+    pub tcp_sack_permitted: bool,
+
+    /// TCP Timestamps option enabled (Kind=8).
+    /// When true, includes TSval and TSecr in the packet.
+    /// Used for RTT measurement and PAWS (Protection Against Wrapped Sequences).
+    pub tcp_timestamps_enabled: bool,
+
+    /// TCP Timestamp Value (TSval).
+    /// Sender's current timestamp, typically milliseconds since some epoch.
+    /// Only used when tcp_timestamps_enabled is true.
+    pub tcp_tsval: u32,
+
+    /// TCP Timestamp Echo Reply (TSecr).
+    /// Echoed timestamp from last received segment.
+    /// Set to 0 in SYN packets, otherwise echoes peer's TSval.
+    pub tcp_tsecr: u32,
+
+    // =========================================================================
     // ICMP-SPECIFIC FIELDS - RFC 792
     // =========================================================================
 
@@ -734,6 +827,15 @@ pub struct PacketEditorState {
     /// Additional HTTP Headers (one per line, "Name: Value" format).
     /// Example: "Authorization: Bearer token123"
     pub http_headers: String,
+
+    /// HTTP Request body (for POST, PUT, PATCH methods)
+    pub http_body: String,
+
+    /// HTTP Cookies (key=value pairs, semicolon separated)
+    pub http_cookies: String,
+
+    /// HTTP Content-Type header (e.g., "application/json", "text/html")
+    pub http_content_type: String,
 
     // =========================================================================
     // SNMP-SPECIFIC FIELDS - RFC 1157/3416
@@ -878,6 +980,14 @@ impl PacketEditorState {
             window_size: 65535,
             urgent_ptr: 0,
 
+            // TCP Options defaults (common SYN options)
+            tcp_mss: 1460,                              // Standard Ethernet MSS
+            tcp_window_scale: 7,                        // Window scale shift (common value)
+            tcp_sack_permitted: true,                   // SACK enabled by default
+            tcp_timestamps_enabled: true,               // Timestamps enabled
+            tcp_tsval: 0,                               // Will be set when sending
+            tcp_tsecr: 0,                               // Echo reply (0 for SYN)
+
             // ICMP defaults
             icmp_type: 8,                               // Echo Request
             icmp_code: 0,
@@ -892,6 +1002,9 @@ impl PacketEditorState {
             http_method: "GET".to_string(),
             http_path: "/".to_string(),
             http_headers: String::new(),
+            http_body: String::new(),
+            http_cookies: String::new(),
+            http_content_type: "application/json".to_string(),
 
             // SNMP defaults
             snmp_version: 2,                            // v2c
@@ -957,6 +1070,13 @@ impl PacketEditorState {
             PacketEditorField::AckNum => self.ack_num.to_string(),
             PacketEditorField::WindowSize => self.window_size.to_string(),
             PacketEditorField::UrgentPtr => self.urgent_ptr.to_string(),
+            // TCP Options fields
+            PacketEditorField::TcpMss => if self.tcp_mss == 0 { "off".to_string() } else { self.tcp_mss.to_string() },
+            PacketEditorField::TcpWindowScale => if self.tcp_window_scale == 255 { "off".to_string() } else { self.tcp_window_scale.to_string() },
+            PacketEditorField::TcpSackPermitted => if self.tcp_sack_permitted { "yes".to_string() } else { "no".to_string() },
+            PacketEditorField::TcpTimestampsEnabled => if self.tcp_timestamps_enabled { "yes".to_string() } else { "no".to_string() },
+            PacketEditorField::TcpTsVal => self.tcp_tsval.to_string(),
+            PacketEditorField::TcpTsEcr => self.tcp_tsecr.to_string(),
             // ICMP fields
             PacketEditorField::IcmpType => self.icmp_type.to_string(),
             PacketEditorField::IcmpCode => self.icmp_code.to_string(),
@@ -993,6 +1113,10 @@ impl PacketEditorState {
             PacketEditorField::ArpSenderIp => if self.arp_sender_ip.is_empty() { "(auto)".to_string() } else { self.arp_sender_ip.clone() },
             PacketEditorField::ArpTargetMac => if self.arp_target_mac.is_empty() { "FF:FF:FF:FF:FF:FF".to_string() } else { self.arp_target_mac.clone() },
             PacketEditorField::ArpTargetIp => self.arp_target_ip.clone(),
+            // HTTP extended fields (context-dependent)
+            PacketEditorField::HttpBody => self.http_body.clone(),
+            PacketEditorField::HttpCookies => self.http_cookies.clone(),
+            PacketEditorField::HttpContentType => self.http_content_type.clone(),
         }
     }
 
@@ -1073,6 +1197,43 @@ impl PacketEditorState {
             PacketEditorField::AckNum => value.parse().map(|v| self.ack_num = v).is_ok(),
             PacketEditorField::WindowSize => value.parse().map(|v| self.window_size = v).is_ok(),
             PacketEditorField::UrgentPtr => value.parse().map(|v| self.urgent_ptr = v).is_ok(),
+            // TCP Options fields
+            PacketEditorField::TcpMss => {
+                let lower = value.to_lowercase();
+                if lower == "off" || lower == "0" || lower.is_empty() {
+                    self.tcp_mss = 0;
+                    true
+                } else {
+                    value.parse().map(|v| self.tcp_mss = v).is_ok()
+                }
+            }
+            PacketEditorField::TcpWindowScale => {
+                let lower = value.to_lowercase();
+                if lower == "off" || lower.is_empty() {
+                    self.tcp_window_scale = 255;
+                    true
+                } else {
+                    value.parse::<u8>().map(|v| {
+                        if v <= 14 {
+                            self.tcp_window_scale = v;
+                        } else {
+                            self.tcp_window_scale = 255; // Invalid, disable
+                        }
+                    }).is_ok()
+                }
+            }
+            PacketEditorField::TcpSackPermitted => {
+                let lower = value.to_lowercase();
+                self.tcp_sack_permitted = matches!(lower.as_str(), "yes" | "y" | "1" | "true" | "on");
+                true
+            }
+            PacketEditorField::TcpTimestampsEnabled => {
+                let lower = value.to_lowercase();
+                self.tcp_timestamps_enabled = matches!(lower.as_str(), "yes" | "y" | "1" | "true" | "on");
+                true
+            }
+            PacketEditorField::TcpTsVal => value.parse().map(|v| self.tcp_tsval = v).is_ok(),
+            PacketEditorField::TcpTsEcr => value.parse().map(|v| self.tcp_tsecr = v).is_ok(),
             // ICMP fields
             PacketEditorField::IcmpType => value.parse().map(|v| self.icmp_type = v).is_ok(),
             PacketEditorField::IcmpCode => value.parse().map(|v| self.icmp_code = v).is_ok(),
@@ -1109,6 +1270,10 @@ impl PacketEditorState {
             PacketEditorField::ArpSenderIp => { self.arp_sender_ip = value; true }
             PacketEditorField::ArpTargetMac => { self.arp_target_mac = value; true }
             PacketEditorField::ArpTargetIp => { self.arp_target_ip = value; true }
+            // HTTP extended fields
+            PacketEditorField::HttpBody => { self.http_body = value; true }
+            PacketEditorField::HttpCookies => { self.http_cookies = value; true }
+            PacketEditorField::HttpContentType => { self.http_content_type = value; true }
         }
     }
 
@@ -1117,6 +1282,257 @@ impl PacketEditorState {
             return None;
         }
         hex::decode(&self.payload_hex).ok()
+    }
+}
+
+// =============================================================================
+// REPEATER (BurpSuite-like packet replay)
+// =============================================================================
+
+/// Protocol-specific request data for the repeater
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum RepeaterRequest {
+    /// HTTP request
+    Http {
+        method: String,
+        path: String,
+        headers: std::collections::HashMap<String, String>,
+        body: Option<Vec<u8>>,
+    },
+    /// Raw TCP packet
+    Tcp {
+        flags: u8,
+        seq_num: u32,
+        ack_num: u32,
+        window_size: u16,
+        payload: Vec<u8>,
+    },
+    /// Raw UDP packet
+    Udp {
+        payload: Vec<u8>,
+    },
+    /// DNS query
+    Dns {
+        query_type: u16,
+        domain: String,
+    },
+    /// ICMP packet
+    Icmp {
+        icmp_type: u8,
+        icmp_code: u8,
+        id: u16,
+        seq: u16,
+    },
+    /// Raw bytes (any protocol)
+    Raw {
+        data: Vec<u8>,
+    },
+}
+
+impl RepeaterRequest {
+    /// Get the protocol name for this request
+    pub fn protocol_name(&self) -> &'static str {
+        match self {
+            RepeaterRequest::Http { .. } => "HTTP",
+            RepeaterRequest::Tcp { .. } => "TCP",
+            RepeaterRequest::Udp { .. } => "UDP",
+            RepeaterRequest::Dns { .. } => "DNS",
+            RepeaterRequest::Icmp { .. } => "ICMP",
+            RepeaterRequest::Raw { .. } => "RAW",
+        }
+    }
+
+    /// Get a short summary of the request
+    pub fn summary(&self) -> String {
+        match self {
+            RepeaterRequest::Http { method, path, .. } => format!("{} {}", method, path),
+            RepeaterRequest::Tcp { flags, .. } => {
+                let flag_names = format_tcp_flags_brief(*flags);
+                format!("TCP {}", flag_names)
+            }
+            RepeaterRequest::Udp { payload } => format!("UDP {} bytes", payload.len()),
+            RepeaterRequest::Dns { query_type, domain } => format!("DNS {} {}", query_type, domain),
+            RepeaterRequest::Icmp { icmp_type, icmp_code, .. } => format!("ICMP {}/{}", icmp_type, icmp_code),
+            RepeaterRequest::Raw { data } => format!("RAW {} bytes", data.len()),
+        }
+    }
+}
+
+/// Format TCP flags briefly for display
+fn format_tcp_flags_brief(flags: u8) -> String {
+    let mut parts = Vec::new();
+    if flags & 0x02 != 0 { parts.push("S"); }
+    if flags & 0x10 != 0 { parts.push("A"); }
+    if flags & 0x01 != 0 { parts.push("F"); }
+    if flags & 0x04 != 0 { parts.push("R"); }
+    if flags & 0x08 != 0 { parts.push("P"); }
+    if flags & 0x20 != 0 { parts.push("U"); }
+    if parts.is_empty() { "---".to_string() } else { parts.join("") }
+}
+
+/// Response status for repeater entries
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum ResponseStatus {
+    /// Response received successfully
+    Success,
+    /// Request timed out
+    Timeout,
+    /// Connection refused
+    ConnectionRefused,
+    /// Network unreachable
+    NetworkUnreachable,
+    /// Other error with message
+    Error(String),
+}
+
+/// Parsed response data
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum ParsedResponse {
+    /// HTTP response
+    Http {
+        status_code: u16,
+        status_text: String,
+        headers: std::collections::HashMap<String, String>,
+        body: Option<Vec<u8>>,
+    },
+    /// DNS response
+    Dns {
+        answers: Vec<String>,
+    },
+    /// Raw response (TCP, UDP, etc.)
+    Raw {
+        data: Vec<u8>,
+    },
+}
+
+/// Response from a repeater request
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RepeaterResponse {
+    /// When the response was received
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Round-trip time in milliseconds
+    pub rtt_ms: f64,
+    /// Response status
+    pub status: ResponseStatus,
+    /// Raw response data
+    pub raw_data: Vec<u8>,
+    /// Parsed response (if applicable)
+    pub parsed: Option<ParsedResponse>,
+}
+
+/// A single repeater entry (request + optional response)
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RepeaterEntry {
+    /// Unique identifier
+    pub id: uuid::Uuid,
+    /// User-assigned name or auto-generated
+    pub name: String,
+    /// When the entry was created
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Protocol used
+    pub protocol: Protocol,
+    /// Target host (IP or hostname)
+    pub target_host: String,
+    /// Target port
+    pub target_port: u16,
+    /// Request data
+    pub request: RepeaterRequest,
+    /// Response (if received)
+    pub response: Option<RepeaterResponse>,
+    /// Number of times this request has been sent
+    pub send_count: u32,
+}
+
+impl RepeaterEntry {
+    /// Create a new repeater entry
+    pub fn new(
+        name: String,
+        protocol: Protocol,
+        target_host: String,
+        target_port: u16,
+        request: RepeaterRequest,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            name,
+            timestamp: chrono::Utc::now(),
+            protocol,
+            target_host,
+            target_port,
+            request,
+            response: None,
+            send_count: 0,
+        }
+    }
+
+    /// Get a display string for the entry
+    pub fn display_name(&self) -> String {
+        if self.name.is_empty() {
+            format!("{} {}:{}", self.request.protocol_name(), self.target_host, self.target_port)
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// Get short summary for list view
+    pub fn short_summary(&self) -> String {
+        format!("{} → {}:{}", self.request.summary(), self.target_host, self.target_port)
+    }
+}
+
+/// Which pane is focused in the Repeater view
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RepeaterPane {
+    /// Entry list on the left
+    #[default]
+    List,
+    /// Request view in the middle
+    Request,
+    /// Response view on the right
+    Response,
+}
+
+/// Repeater persistence functions
+impl RepeaterEntry {
+    /// Get the default repeater file path
+    pub fn default_file_path() -> std::path::PathBuf {
+        let config_dir = if cfg!(windows) {
+            std::env::var("APPDATA")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        } else {
+            std::env::var("HOME")
+                .map(|h| std::path::PathBuf::from(h).join(".config"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+        };
+        config_dir.join("noircast").join("repeater.json")
+    }
+
+    /// Save repeater entries to a file
+    pub fn save_entries(entries: &[RepeaterEntry], path: Option<&std::path::Path>) -> anyhow::Result<()> {
+        let path = path.map(|p| p.to_path_buf()).unwrap_or_else(Self::default_file_path);
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let json = serde_json::to_string_pretty(entries)?;
+        std::fs::write(&path, json)?;
+        Ok(())
+    }
+
+    /// Load repeater entries from a file
+    pub fn load_entries(path: Option<&std::path::Path>) -> anyhow::Result<Vec<RepeaterEntry>> {
+        let path = path.map(|p| p.to_path_buf()).unwrap_or_else(Self::default_file_path);
+
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let json = std::fs::read_to_string(&path)?;
+        let entries: Vec<RepeaterEntry> = serde_json::from_str(&json)?;
+        Ok(entries)
     }
 }
 
@@ -1151,6 +1567,22 @@ pub struct App {
     pub protocol_picker_index: usize,
     pub protocol_picker_filter: String,
 
+    // Template picker popup
+    pub show_template_picker: bool,
+    pub template_picker_index: usize,
+    pub template_picker_filter: String,
+
+    // Theme picker popup
+    pub show_theme_picker: bool,
+    pub theme_picker_index: usize,
+    pub current_theme: crate::ui::theme::ThemeType,
+
+    // Repeater (BurpSuite-like packet replay)
+    pub show_repeater: bool,
+    pub repeater_entries: Vec<RepeaterEntry>,
+    pub repeater_selected: usize,
+    pub repeater_pane_focus: RepeaterPane,
+
     // Packet configuration
     pub selected_protocol: Protocol,
     pub selected_scan_type: ScanType,
@@ -1171,6 +1603,9 @@ pub struct App {
     // HTTP-specific options
     pub http_method: String,      // GET, POST, HEAD, etc.
     pub http_path: String,        // Request path
+    pub http_body: String,        // Request body (POST, PUT, PATCH)
+    pub http_cookies: String,     // Cookies (key=value pairs)
+    pub http_content_type: String, // Content-Type header
 
     // SNMP-specific options
     pub snmp_version: u8,         // 1, 2 (v2c), 3
@@ -1291,6 +1726,20 @@ impl App {
             protocol_picker_index: 0,
             protocol_picker_filter: String::new(),
 
+            show_template_picker: false,
+            template_picker_index: 0,
+            template_picker_filter: String::new(),
+
+            show_theme_picker: false,
+            theme_picker_index: 0,
+            current_theme: crate::ui::theme::ThemeType::default(),
+
+            // Repeater - load saved entries
+            show_repeater: false,
+            repeater_entries: RepeaterEntry::load_entries(None).unwrap_or_default(),
+            repeater_selected: 0,
+            repeater_pane_focus: RepeaterPane::default(),
+
             selected_protocol: Protocol::Tcp,
             selected_scan_type: ScanType::SynScan,
             selected_flags: vec![TcpFlag::Syn],
@@ -1310,6 +1759,9 @@ impl App {
             // HTTP defaults
             http_method: "GET".to_string(),
             http_path: "/".to_string(),
+            http_body: String::new(),
+            http_cookies: String::new(),
+            http_content_type: "application/json".to_string(),
 
             // SNMP defaults
             snmp_version: 2,  // v2c
@@ -1482,6 +1934,199 @@ impl App {
         // Reset scan_type_index to prevent out-of-bounds when switching protocols
         self.scan_type_index = 0;
         self.log_info(format!("Protocol set to: {}", protocol));
+    }
+
+    /// Add current packet configuration to the repeater
+    pub fn add_current_to_repeater(&mut self) {
+        // Determine target host and port
+        let target_host = if self.target.host.is_empty() {
+            "localhost".to_string()
+        } else {
+            self.target.host.clone()
+        };
+        let target_port = self.target.ports.first().copied().unwrap_or(80);
+
+        // Create protocol-specific request
+        let request = match self.selected_protocol {
+            Protocol::Http | Protocol::Https => {
+                let mut headers = std::collections::HashMap::new();
+                headers.insert("Host".to_string(), format!("{}:{}", target_host, target_port));
+                headers.insert("User-Agent".to_string(), "NoirCast/0.1.0".to_string());
+                RepeaterRequest::Http {
+                    method: self.http_method.clone(),
+                    path: self.http_path.clone(),
+                    headers,
+                    body: self.custom_payload.clone(),
+                }
+            }
+            Protocol::Tcp => {
+                RepeaterRequest::Tcp {
+                    flags: self.flags_bitmask(),
+                    seq_num: self.packet_editor.seq_num,
+                    ack_num: self.packet_editor.ack_num,
+                    window_size: self.packet_editor.window_size,
+                    payload: self.custom_payload.clone().unwrap_or_default(),
+                }
+            }
+            Protocol::Udp | Protocol::Ntp | Protocol::Snmp | Protocol::Ssdp | Protocol::NetBios | Protocol::Dhcp => {
+                RepeaterRequest::Udp {
+                    payload: self.custom_payload.clone().unwrap_or_default(),
+                }
+            }
+            Protocol::Dns => {
+                RepeaterRequest::Dns {
+                    query_type: self.dns_query_type,
+                    domain: if self.dns_domain.is_empty() {
+                        target_host.clone()
+                    } else {
+                        self.dns_domain.clone()
+                    },
+                }
+            }
+            Protocol::Icmp => {
+                RepeaterRequest::Icmp {
+                    icmp_type: self.icmp_type,
+                    icmp_code: self.icmp_code,
+                    id: self.icmp_id,
+                    seq: self.icmp_seq,
+                }
+            }
+            Protocol::Raw | Protocol::Smb | Protocol::Ldap | Protocol::Kerberos | Protocol::Arp => {
+                RepeaterRequest::Raw {
+                    data: self.custom_payload.clone().unwrap_or_default(),
+                }
+            }
+        };
+
+        let entry = RepeaterEntry::new(
+            String::new(), // Auto-generate name
+            self.selected_protocol,
+            target_host,
+            target_port,
+            request,
+        );
+
+        self.repeater_entries.push(entry);
+
+        // Auto-save entries
+        if let Err(e) = RepeaterEntry::save_entries(&self.repeater_entries, None) {
+            self.log_warning(format!("Failed to save repeater entries: {}", e));
+        }
+    }
+
+    /// Apply packet editor changes to main App state.
+    /// Called when closing the packet editor to preserve user's edits.
+    pub fn apply_packet_editor_changes(&mut self) {
+        let editor = &self.packet_editor;
+
+        // HTTP fields
+        self.http_method = editor.http_method.clone();
+        self.http_path = editor.http_path.clone();
+        self.http_body = editor.http_body.clone();
+        self.http_cookies = editor.http_cookies.clone();
+        self.http_content_type = editor.http_content_type.clone();
+
+        // DNS fields
+        self.dns_query_type = editor.dns_query_type;
+        self.dns_domain = editor.dns_domain.clone();
+
+        // ICMP fields
+        self.icmp_type = editor.icmp_type;
+        self.icmp_code = editor.icmp_code;
+        self.icmp_id = editor.icmp_id;
+        self.icmp_seq = editor.icmp_seq;
+
+        // SNMP fields
+        self.snmp_version = editor.snmp_version;
+        self.snmp_community = editor.snmp_community.clone();
+
+        // SMB fields
+        self.smb_version = editor.smb_version;
+
+        // LDAP fields
+        self.ldap_scope = editor.ldap_scope;
+
+        // DHCP fields
+        self.dhcp_type = editor.dhcp_type;
+
+        // Note: Kerberos editor has realm/user strings, App has kerberos_type u8
+        // These don't directly map, so kerberos is edited via command mode
+
+        // ARP fields
+        self.arp_operation = editor.arp_operation;
+
+        // Target port if specified
+        if editor.dest_port > 0 {
+            self.target.ports = vec![editor.dest_port];
+        }
+
+        self.log_debug("Packet editor changes applied");
+    }
+
+    /// Apply a packet template to the current configuration
+    pub fn apply_template(&mut self, template: PacketTemplate) {
+        // Set protocol
+        self.selected_protocol = template.protocol();
+
+        // Set default port if not custom
+        if template != PacketTemplate::Custom {
+            let port = template.default_port();
+            if port > 0 {
+                self.target.ports = vec![port];
+            }
+        }
+
+        // Set TCP flags
+        self.selected_flags = template.tcp_flags();
+
+        // Set protocol-specific fields
+        match template {
+            PacketTemplate::HttpGet => {
+                self.http_method = "GET".to_string();
+                self.http_path = "/".to_string();
+            }
+            PacketTemplate::HttpHead => {
+                self.http_method = "HEAD".to_string();
+                self.http_path = "/".to_string();
+            }
+            PacketTemplate::HttpPost => {
+                self.http_method = "POST".to_string();
+                self.http_path = "/".to_string();
+            }
+            PacketTemplate::HttpOptions => {
+                self.http_method = "OPTIONS".to_string();
+                self.http_path = "*".to_string();
+            }
+            PacketTemplate::DnsQueryA => {
+                self.dns_query_type = 1;
+            }
+            PacketTemplate::DnsQueryAAAA => {
+                self.dns_query_type = 28;
+            }
+            PacketTemplate::DnsQueryMX => {
+                self.dns_query_type = 15;
+            }
+            PacketTemplate::DnsQueryTXT => {
+                self.dns_query_type = 16;
+            }
+            PacketTemplate::IcmpPing => {
+                self.icmp_type = 8; // Echo Request
+                self.icmp_code = 0;
+            }
+            _ => {}
+        }
+
+        // Sync packet editor with new values
+        self.packet_editor.http_method = self.http_method.clone();
+        self.packet_editor.http_path = self.http_path.clone();
+        self.packet_editor.dns_query_type = self.dns_query_type;
+        self.packet_editor.icmp_type = self.icmp_type;
+        self.packet_editor.icmp_code = self.icmp_code;
+        if !self.target.ports.is_empty() {
+            self.packet_editor.dest_port = self.target.ports[0];
+        }
+
+        self.log_success(format!("Applied template: {}", template.name()));
     }
 
     /// Parse target from string (host:port or just host)

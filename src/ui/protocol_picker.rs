@@ -6,19 +6,11 @@ use crate::app::App;
 use crate::config::Protocol;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Row, Table},
     Frame,
 };
-
-// Color scheme matching the rest of the app
-const BG_COLOR: Color = Color::Rgb(0, 0, 0);
-const FG_PRIMARY: Color = Color::White;
-const FG_SECONDARY: Color = Color::Rgb(128, 128, 128);
-const FG_DIM: Color = Color::Rgb(80, 80, 80);
-const ACCENT: Color = Color::Rgb(80, 200, 100);
-const ACCENT_BRIGHT: Color = Color::Rgb(100, 255, 120);
 
 /// Get all available protocols
 pub fn all_protocols() -> Vec<Protocol> {
@@ -101,6 +93,7 @@ pub fn filter_protocols(query: &str) -> Vec<Protocol> {
 
 /// Render the protocol picker popup
 pub fn render_protocol_picker(frame: &mut Frame, app: &App) {
+    let colors = app.current_theme.colors();
     let area = frame.area();
 
     // Calculate popup size
@@ -121,12 +114,12 @@ pub fn render_protocol_picker(frame: &mut Frame, app: &App) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(ACCENT_BRIGHT).bold())
+        .title_style(Style::default().fg(colors.accent_bright).bold())
         .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG_COLOR))
+        .border_style(Style::default().fg(colors.accent))
+        .style(Style::default().bg(colors.bg))
         .padding(Padding::uniform(1));
 
     let inner = block.inner(popup_area);
@@ -149,14 +142,16 @@ pub fn render_protocol_picker(frame: &mut Frame, app: &App) {
     render_protocol_list(frame, app, chunks[0], &protocols);
 
     // Render help text
-    render_help_text(frame, chunks[2]);
+    render_help_text(frame, app, chunks[2]);
 }
 
 /// Render the protocol list
 fn render_protocol_list(frame: &mut Frame, app: &App, area: Rect, protocols: &[Protocol]) {
+    let colors = app.current_theme.colors();
+
     if protocols.is_empty() {
         let msg = Paragraph::new("No matching protocols")
-            .style(Style::default().fg(FG_DIM))
+            .style(Style::default().fg(colors.fg_dim))
             .alignment(Alignment::Center);
         frame.render_widget(msg, area);
         return;
@@ -166,25 +161,25 @@ fn render_protocol_list(frame: &mut Frame, app: &App, area: Rect, protocols: &[P
         let is_selected = idx == app.protocol_picker_index;
         let is_current = *proto == app.selected_protocol;
 
-        let indicator = if is_selected { "▶" } else if is_current { "●" } else { " " };
+        let indicator = if is_selected { ">" } else if is_current { "*" } else { " " };
         let indicator_style = if is_selected {
-            Style::default().fg(ACCENT_BRIGHT)
+            Style::default().fg(colors.accent_bright)
         } else if is_current {
-            Style::default().fg(ACCENT)
+            Style::default().fg(colors.accent)
         } else {
-            Style::default().fg(BG_COLOR)
+            Style::default().fg(colors.bg)
         };
 
         let name_style = if is_selected {
-            Style::default().fg(ACCENT_BRIGHT).bold()
+            Style::default().fg(colors.accent_bright).bold()
         } else if is_current {
-            Style::default().fg(ACCENT)
+            Style::default().fg(colors.accent)
         } else {
-            Style::default().fg(FG_PRIMARY)
+            Style::default().fg(colors.fg_primary)
         };
 
-        let port_style = Style::default().fg(FG_SECONDARY);
-        let desc_style = Style::default().fg(FG_DIM);
+        let port_style = Style::default().fg(colors.fg_secondary);
+        let desc_style = Style::default().fg(colors.fg_dim);
 
         Row::new(vec![
             Span::styled(indicator, indicator_style),
@@ -219,16 +214,18 @@ fn render_protocol_list(frame: &mut Frame, app: &App, area: Rect, protocols: &[P
 }
 
 /// Render help text at the bottom
-fn render_help_text(frame: &mut Frame, area: Rect) {
+fn render_help_text(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
+
     let help_text = Line::from(vec![
-        Span::styled("j/k", Style::default().fg(ACCENT)),
-        Span::styled(" navigate  ", Style::default().fg(FG_DIM)),
-        Span::styled("Enter", Style::default().fg(ACCENT)),
-        Span::styled(" select  ", Style::default().fg(FG_DIM)),
-        Span::styled("Type", Style::default().fg(ACCENT)),
-        Span::styled(" to filter  ", Style::default().fg(FG_DIM)),
-        Span::styled("Esc", Style::default().fg(ACCENT)),
-        Span::styled(" close", Style::default().fg(FG_DIM)),
+        Span::styled("j/k", Style::default().fg(colors.accent)),
+        Span::styled(" navigate  ", Style::default().fg(colors.fg_dim)),
+        Span::styled("Enter", Style::default().fg(colors.accent)),
+        Span::styled(" select  ", Style::default().fg(colors.fg_dim)),
+        Span::styled("Type", Style::default().fg(colors.accent)),
+        Span::styled(" to filter  ", Style::default().fg(colors.fg_dim)),
+        Span::styled("Esc", Style::default().fg(colors.accent)),
+        Span::styled(" close", Style::default().fg(colors.fg_dim)),
     ]);
 
     let paragraph = Paragraph::new(help_text).alignment(Alignment::Center);

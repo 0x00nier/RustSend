@@ -2,7 +2,7 @@
 //!
 //! Implements vim-like navigation and command handling
 
-use crate::app::{ActivePane, App, HttpDirection, HttpStreamEntry, InputMode, PacketDirection, PacketEditorField, TargetField};
+use crate::app::{ActivePane, App, HttpDirection, HttpStreamEntry, InputMode, PacketDirection, PacketEditorField, RepeaterPane, TargetField};
 use crate::config::{PacketTemplate, Protocol, ScanType, TcpFlag};
 use crate::network::protocols::{DnsQuery, DnsType, NtpPacket, get_service_name};
 use crate::network::http::{HttpRequest, HttpResponse, HttpMethod, HttpStreamParser, status_description, format_headers};
@@ -29,9 +29,27 @@ pub async fn handle_key_event(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    // Template picker popup takes priority when visible
+    if app.show_template_picker {
+        handle_template_picker_keys(app, key);
+        return;
+    }
+
+    // Theme picker popup takes priority when visible
+    if app.show_theme_picker {
+        handle_theme_picker_keys(app, key);
+        return;
+    }
+
     // Packet editor popup takes priority when visible
     if app.show_packet_editor {
         handle_packet_editor_keys(app, key);
+        return;
+    }
+
+    // Repeater popup takes priority when visible
+    if app.show_repeater {
+        handle_repeater_keys(app, key).await;
         return;
     }
 
@@ -103,14 +121,24 @@ fn handle_packet_editor_keys(app: &mut App, key: KeyEvent) {
         // Navigation mode
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
+                // Apply changes before closing
+                app.apply_packet_editor_changes();
                 app.show_packet_editor = false;
-                app.log_debug("Packet editor closed");
+                app.log_info("Packet editor closed - changes applied");
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                app.packet_editor.current_field = app.packet_editor.current_field.next_for_protocol(app.selected_protocol);
+                // Context-aware navigation (shows body/cookies for POST)
+                app.packet_editor.current_field = app.packet_editor.current_field.next_for_context(
+                    app.selected_protocol,
+                    &app.packet_editor.http_method,
+                );
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                app.packet_editor.current_field = app.packet_editor.current_field.prev_for_protocol(app.selected_protocol);
+                // Context-aware navigation (shows body/cookies for POST)
+                app.packet_editor.current_field = app.packet_editor.current_field.prev_for_context(
+                    app.selected_protocol,
+                    &app.packet_editor.http_method,
+                );
             }
             KeyCode::Enter | KeyCode::Char('i') => {
                 // Start editing current field
@@ -228,6 +256,276 @@ fn handle_protocol_picker_keys(app: &mut App, key: KeyEvent) {
             // Reset index when filter changes
             app.protocol_picker_index = 0;
         }
+        _ => {}
+    }
+}
+
+/// Handle keys in the template picker popup
+fn handle_template_picker_keys(app: &mut App, key: KeyEvent) {
+    let templates = get_filtered_templates(&app.template_picker_filter);
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_template_picker = false;
+            app.template_picker_filter.clear();
+            app.template_picker_index = 0;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if !templates.is_empty() {
+                app.template_picker_index = (app.template_picker_index + 1) % templates.len();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if !templates.is_empty() {
+                app.template_picker_index = app.template_picker_index
+                    .checked_sub(1)
+                    .unwrap_or(templates.len().saturating_sub(1));
+            }
+        }
+        KeyCode::Char('g') => {
+            // Go to top
+            app.template_picker_index = 0;
+        }
+        KeyCode::Char('G') => {
+            // Go to bottom
+            if !templates.is_empty() {
+                app.template_picker_index = templates.len() - 1;
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(template) = templates.get(app.template_picker_index) {
+                app.apply_template(*template);
+                app.show_template_picker = false;
+                app.template_picker_filter.clear();
+                app.template_picker_index = 0;
+            }
+        }
+        KeyCode::Backspace => {
+            app.template_picker_filter.pop();
+            // Reset index if filter changes
+            app.template_picker_index = 0;
+        }
+        KeyCode::Char(c) if c.is_alphanumeric() || c == ' ' => {
+            app.template_picker_filter.push(c);
+            // Reset index when filter changes
+            app.template_picker_index = 0;
+        }
+        _ => {}
+    }
+}
+
+/// Get templates filtered by search string
+fn get_filtered_templates(filter: &str) -> Vec<PacketTemplate> {
+    let all = PacketTemplate::all();
+
+    if filter.is_empty() {
+        return all;
+    }
+
+    let filter_lower = filter.to_lowercase();
+    all.into_iter()
+        .filter(|t| {
+            let name = t.name().to_lowercase();
+            name.contains(&filter_lower)
+        })
+        .collect()
+}
+
+/// Handle theme picker keys
+fn handle_theme_picker_keys(app: &mut App, key: KeyEvent) {
+    use crate::ui::theme::ThemeType;
+
+    let themes = ThemeType::all();
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_theme_picker = false;
+            app.theme_picker_index = 0;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if !themes.is_empty() {
+                app.theme_picker_index = (app.theme_picker_index + 1) % themes.len();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if !themes.is_empty() {
+                app.theme_picker_index = app
+                    .theme_picker_index
+                    .checked_sub(1)
+                    .unwrap_or(themes.len().saturating_sub(1));
+            }
+        }
+        KeyCode::Char('g') => {
+            app.theme_picker_index = 0;
+        }
+        KeyCode::Char('G') => {
+            if !themes.is_empty() {
+                app.theme_picker_index = themes.len() - 1;
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(theme) = themes.get(app.theme_picker_index) {
+                app.current_theme = *theme;
+                app.show_theme_picker = false;
+                app.theme_picker_index = 0;
+                app.log_success(format!("Theme set to {}", theme.name()));
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle keys in the repeater popup
+async fn handle_repeater_keys(app: &mut App, key: KeyEvent) {
+    match key.code {
+        // Close repeater
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.show_repeater = false;
+            app.log_debug("Repeater closed");
+        }
+
+        // Navigate entry list
+        KeyCode::Char('j') | KeyCode::Down => {
+            if !app.repeater_entries.is_empty() {
+                app.repeater_selected = (app.repeater_selected + 1) % app.repeater_entries.len();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if !app.repeater_entries.is_empty() {
+                app.repeater_selected = app.repeater_selected
+                    .checked_sub(1)
+                    .unwrap_or(app.repeater_entries.len().saturating_sub(1));
+            }
+        }
+
+        // Switch pane focus
+        KeyCode::Tab => {
+            app.repeater_pane_focus = match app.repeater_pane_focus {
+                RepeaterPane::List => RepeaterPane::Request,
+                RepeaterPane::Request => RepeaterPane::Response,
+                RepeaterPane::Response => RepeaterPane::List,
+            };
+        }
+        KeyCode::BackTab => {
+            app.repeater_pane_focus = match app.repeater_pane_focus {
+                RepeaterPane::List => RepeaterPane::Response,
+                RepeaterPane::Request => RepeaterPane::List,
+                RepeaterPane::Response => RepeaterPane::Request,
+            };
+        }
+
+        // Resend selected entry
+        KeyCode::Enter | KeyCode::Char('r') => {
+            // Extract all needed info before any mutations
+            let entry_data = app.repeater_entries.get(app.repeater_selected).map(|e| {
+                (
+                    e.request.clone(),
+                    e.target_host.clone(),
+                    e.target_port,
+                    e.request.summary(),
+                )
+            });
+
+            if let Some((request, host, port, summary)) = entry_data {
+                // Increment send count
+                if let Some(entry) = app.repeater_entries.get_mut(app.repeater_selected) {
+                    entry.send_count += 1;
+                }
+                let count = app.repeater_entries.get(app.repeater_selected)
+                    .map(|e| e.send_count).unwrap_or(1);
+
+                app.log_info(format!("Resending {} (attempt #{})", summary, count));
+
+                // Resolve host first
+                let sender = app.packet_sender.clone();
+                if let Some(sender) = sender {
+                    match crate::network::sender::PacketSender::resolve_host(&host).await {
+                        Ok(ip) => {
+                            let start = std::time::Instant::now();
+                            let result = send_repeater_request(
+                                &sender,
+                                ip,
+                                port,
+                                &request,
+                                app,
+                            ).await;
+
+                            let rtt_ms = start.elapsed().as_secs_f64() * 1000.0;
+
+                            // Update entry with response
+                            if let Some(entry) = app.repeater_entries.get_mut(app.repeater_selected) {
+                                entry.response = Some(crate::app::RepeaterResponse {
+                                    timestamp: chrono::Utc::now(),
+                                    rtt_ms,
+                                    status: result.status.clone(),
+                                    raw_data: result.raw_data.clone(),
+                                    parsed: result.parsed.clone(),
+                                });
+                            }
+
+                            // Log result
+                            match &result.status {
+                                crate::app::ResponseStatus::Success => {
+                                    app.log_success(format!(
+                                        "Response received from {}:{} ({:.2}ms, {} bytes)",
+                                        host, port, rtt_ms, result.raw_data.len()
+                                    ));
+                                }
+                                crate::app::ResponseStatus::Timeout => {
+                                    app.log_warning(format!("Request to {}:{} timed out", host, port));
+                                }
+                                crate::app::ResponseStatus::ConnectionRefused => {
+                                    app.log_error(format!("Connection refused by {}:{}", host, port));
+                                }
+                                crate::app::ResponseStatus::NetworkUnreachable => {
+                                    app.log_error(format!("Network unreachable: {}:{}", host, port));
+                                }
+                                crate::app::ResponseStatus::Error(e) => {
+                                    app.log_error(format!("Error: {}", e));
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            app.log_error(format!("DNS resolution failed for {}: {}", host, e));
+                        }
+                    }
+                } else {
+                    app.log_error("Packet sender not initialized");
+                }
+            } else {
+                app.log_warning("No entry selected to resend");
+            }
+        }
+
+        // Delete entry
+        KeyCode::Char('d') => {
+            if !app.repeater_entries.is_empty() {
+                let removed = app.repeater_entries.remove(app.repeater_selected);
+                app.log_info(format!("Deleted entry: {}", removed.request.summary()));
+                // Adjust selection if needed
+                if app.repeater_selected >= app.repeater_entries.len() && app.repeater_selected > 0 {
+                    app.repeater_selected -= 1;
+                }
+            }
+        }
+
+        // New entry from current packet config
+        KeyCode::Char('n') => {
+            app.add_current_to_repeater();
+            app.repeater_selected = app.repeater_entries.len().saturating_sub(1);
+            app.log_success("Added current config to repeater");
+        }
+
+        // Move to first/last entry
+        KeyCode::Char('g') => {
+            app.repeater_selected = 0;
+        }
+        KeyCode::Char('G') => {
+            if !app.repeater_entries.is_empty() {
+                app.repeater_selected = app.repeater_entries.len() - 1;
+            }
+        }
+
         _ => {}
     }
 }
@@ -380,6 +678,26 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('P') => {
             // Open protocol picker
             app.show_protocol_picker = true;
+        }
+        KeyCode::Char('R') => {
+            // Open repeater view
+            app.show_repeater = true;
+            app.log_debug("Repeater opened");
+        }
+        KeyCode::Char('S') => {
+            // Send current config to repeater (Shift+S)
+            let protocol_name = format!("{:?}", app.selected_protocol);
+            app.add_current_to_repeater();
+            app.repeater_selected = app.repeater_entries.len().saturating_sub(1);
+            app.log_success(format!("Added {} config to repeater", protocol_name));
+        }
+        KeyCode::Char('T') => {
+            // Open template picker (Shift+T)
+            app.show_template_picker = true;
+        }
+        KeyCode::Char('t') => {
+            // Open theme picker
+            app.show_theme_picker = true;
         }
 
         // Protocol selection (number keys)
@@ -1832,10 +2150,19 @@ async fn execute_command(app: &mut App, command: &str) {
             app.log_success(format!("Built HTTP POST with body ({} bytes)", payload.len()));
         }
         "tcpbuilder" => {
-            // Use TcpPacketBuilder with all methods
-            use crate::network::packet::TcpPacketBuilder;
+            // Use TcpPacketBuilder with all methods including IP fragmentation and TCP options
+            use crate::network::packet::{TcpPacketBuilder, TcpOption, encode_tcp_options};
             let src_ip = Ipv4Addr::new(192, 168, 1, 100);
             let dst_ip = Ipv4Addr::new(192, 168, 1, 1);
+
+            // Test TCP options as a vector
+            let tcp_opts = vec![
+                TcpOption::Mss(1460),
+                TcpOption::WindowScale(7),
+                TcpOption::SackPermitted,
+                TcpOption::Timestamps { tsval: 123456, tsecr: 0 },
+            ];
+
             let packet = PacketBuilder::tcp()
                 .source_ip(src_ip)
                 .dest_ip(dst_ip)
@@ -1851,9 +2178,43 @@ async fn execute_command(app: &mut App, command: &str) {
                 .ack_num(2000)
                 .window(65535)
                 .ttl(64)
+                // IP fragmentation fields (RFC 791)
+                .ip_flags(0x02)        // DF flag
+                .ip_id(0x1234)
+                .fragment_offset(0)
+                .dscp(46)              // EF DSCP for expedited forwarding
+                .ecn(0)
+                .dont_fragment()
+                // TCP options (RFC 793/7323)
+                .tcp_options(tcp_opts)
                 .payload(vec![0x41, 0x42, 0x43]);
-            let _ = TcpPacketBuilder::new(); // use the struct directly
-            // Also test flags methods
+
+            // Test add_tcp_option method
+            let packet_with_single_opt = TcpPacketBuilder::new()
+                .source_ip(src_ip)
+                .dest_ip(dst_ip)
+                .add_tcp_option(TcpOption::Mss(1460))
+                .add_tcp_option(TcpOption::SackPermitted);
+
+            // Test syn_options convenience method
+            let packet_with_syn_opts = TcpPacketBuilder::new()
+                .source_ip(src_ip)
+                .dest_ip(dst_ip)
+                .syn()
+                .syn_options(1460, 7, 123456);
+
+            // Build all packets to test the full flow
+            if let Ok(built) = packet.build() {
+                app.log_debug(format!("TCP packet with options built: {} bytes", built.len()));
+            }
+            if let Ok(built) = packet_with_single_opt.build() {
+                app.log_debug(format!("TCP packet with single options: {} bytes", built.len()));
+            }
+            if let Ok(built) = packet_with_syn_opts.build() {
+                app.log_debug(format!("TCP packet with SYN options: {} bytes", built.len()));
+            }
+
+            // Also test flags methods and more_fragments
             let packet2 = PacketBuilder::tcp()
                 .source_ip(src_ip)
                 .dest_ip(dst_ip)
@@ -1862,19 +2223,41 @@ async fn execute_command(app: &mut App, command: &str) {
                 .flags(&[TcpFlag::Syn, TcpFlag::Ack])
                 .flags_raw(0x12)
                 .xmas()
-                .null();
+                .null()
+                .more_fragments()
+                .fragment_offset(185);
+
+            // Test TCP options encoding
+            let options = vec![
+                TcpOption::Mss(1460),
+                TcpOption::WindowScale(7),
+                TcpOption::SackPermitted,
+                TcpOption::Timestamps { tsval: 123456, tsecr: 0 },
+            ];
+            let options_bytes = encode_tcp_options(&options);
+            app.log_debug(format!("TCP options encoded: {} bytes", options_bytes.len()));
+
+            // Test TcpOption methods
+            for opt in &options {
+                app.log_debug(format!("  {} (kind={})", opt.name(), opt.kind()));
+            }
+            let _ = TcpOption::all_types();
+            let _ = TcpOption::Nop.encode();
+            let _ = TcpOption::End.encode();
+            let _ = TcpOption::Sack(vec![(1000, 2000)]).encode();
+
             match packet.build() {
                 Ok(data) => {
                     // Also test build_segment
                     let _ = packet2.build_segment();
                     app.custom_payload = Some(data.clone());
-                    app.log_success(format!("Built TCP packet ({} bytes)", data.len()));
+                    app.log_success(format!("Built TCP packet ({} bytes) with IP fragmentation fields", data.len()));
                 }
                 Err(e) => app.log_error(format!("Failed: {}", e)),
             }
         }
         "udpbuilder" => {
-            // Use UdpPacketBuilder with all methods
+            // Use UdpPacketBuilder with all methods including IP fragmentation
             use crate::network::packet::UdpPacketBuilder;
             let src_ip = Ipv4Addr::new(192, 168, 1, 100);
             let dst_ip = Ipv4Addr::new(192, 168, 1, 1);
@@ -1884,18 +2267,29 @@ async fn execute_command(app: &mut App, command: &str) {
                 .source_port(12345)
                 .dest_port(53)
                 .ttl(64)
+                // IP fragmentation fields (RFC 791)
+                .ip_flags(0x02)
+                .ip_id(0x5678)
+                .fragment_offset(0)
+                .dscp(0)
+                .ecn(0)
+                .dont_fragment()
                 .payload(vec![0x41, 0x42, 0x43]);
             let _ = UdpPacketBuilder::new(); // use the struct directly
+            // Also test more_fragments
+            let _ = PacketBuilder::udp()
+                .more_fragments()
+                .fragment_offset(100);
             match packet.build() {
                 Ok(data) => {
                     app.custom_payload = Some(data.clone());
-                    app.log_success(format!("Built UDP packet ({} bytes)", data.len()));
+                    app.log_success(format!("Built UDP packet ({} bytes) with IP fragmentation fields", data.len()));
                 }
                 Err(e) => app.log_error(format!("Failed: {}", e)),
             }
         }
         "icmpbuilder" => {
-            // Use IcmpPacketBuilder with all methods
+            // Use IcmpPacketBuilder with all methods including IP fragmentation
             use crate::network::packet::IcmpPacketBuilder;
             let src_ip = Ipv4Addr::new(192, 168, 1, 100);
             let dst_ip = Ipv4Addr::new(192, 168, 1, 1);
@@ -1909,15 +2303,121 @@ async fn execute_command(app: &mut App, command: &str) {
                 .identifier(1234)
                 .sequence(1)
                 .ttl(64)
+                // IP fragmentation fields (RFC 791)
+                .ip_flags(0x00)
+                .ip_id(0x9ABC)
+                .fragment_offset(0)
+                .dscp(0)
+                .ecn(0)
+                .dont_fragment()
                 .payload(vec![0x41, 0x42, 0x43]);
             let _ = IcmpPacketBuilder::new(); // use the struct directly
+            // Also test more_fragments
+            let _ = PacketBuilder::icmp()
+                .more_fragments()
+                .fragment_offset(50);
             match packet.build() {
                 Ok(data) => {
                     app.custom_payload = Some(data.clone());
-                    app.log_success(format!("Built ICMP packet ({} bytes)", data.len()));
+                    app.log_success(format!("Built ICMP packet ({} bytes) with IP fragmentation fields", data.len()));
                 }
                 Err(e) => app.log_error(format!("Failed: {}", e)),
             }
+        }
+        "repeatertest" => {
+            // Test Repeater data structures and persistence
+            use crate::app::{RepeaterEntry, RepeaterRequest, RepeaterPane, RepeaterResponse, ResponseStatus, ParsedResponse};
+
+            // Create a test HTTP repeater entry
+            let http_entry = RepeaterEntry::new(
+                "Test HTTP".to_string(),
+                Protocol::Http,
+                "example.com".to_string(),
+                80,
+                RepeaterRequest::Http {
+                    method: "GET".to_string(),
+                    path: "/api/test".to_string(),
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                },
+            );
+
+            // Create a test TCP repeater entry
+            let tcp_entry = RepeaterEntry::new(
+                "Test TCP SYN".to_string(),
+                Protocol::Tcp,
+                "192.168.1.1".to_string(),
+                443,
+                RepeaterRequest::Tcp {
+                    flags: 0x02, // SYN
+                    seq_num: 12345,
+                    ack_num: 0,
+                    window_size: 65535,
+                    payload: vec![],
+                },
+            );
+
+            // Test display methods
+            app.log_debug(format!("Entry 1: {} - {}", http_entry.display_name(), http_entry.short_summary()));
+            app.log_debug(format!("Entry 2: {} - {}", tcp_entry.display_name(), tcp_entry.short_summary()));
+
+            // Test RepeaterRequest methods
+            let udp_req = RepeaterRequest::Udp { payload: vec![0x41, 0x42] };
+            let dns_req = RepeaterRequest::Dns { query_type: 1, domain: "example.com".to_string() };
+            let icmp_req = RepeaterRequest::Icmp { icmp_type: 8, icmp_code: 0, id: 1, seq: 1 };
+            let raw_req = RepeaterRequest::Raw { data: vec![0x00, 0x01] };
+
+            app.log_debug(format!("Protocols: {}, {}, {}, {}",
+                udp_req.protocol_name(), dns_req.protocol_name(),
+                icmp_req.protocol_name(), raw_req.protocol_name()));
+            app.log_debug(format!("Summaries: {}, {}", udp_req.summary(), dns_req.summary()));
+            app.log_debug(format!("Summaries: {}, {}", icmp_req.summary(), raw_req.summary()));
+
+            // Test RepeaterPane enum
+            let panes = [RepeaterPane::List, RepeaterPane::Request, RepeaterPane::Response];
+            app.log_debug(format!("Panes: {:?}", panes));
+
+            // Test RepeaterResponse
+            let response = RepeaterResponse {
+                timestamp: chrono::Utc::now(),
+                rtt_ms: 10.5,
+                status: ResponseStatus::Success,
+                raw_data: vec![0x48, 0x54, 0x54, 0x50],
+                parsed: Some(ParsedResponse::Http {
+                    status_code: 200,
+                    status_text: "OK".to_string(),
+                    headers: std::collections::HashMap::new(),
+                    body: None,
+                }),
+            };
+            app.log_debug(format!("Response RTT: {:.2}ms, status: {:?}", response.rtt_ms, response.status));
+
+            // Test other ResponseStatus variants
+            let _timeout = ResponseStatus::Timeout;
+            let _refused = ResponseStatus::ConnectionRefused;
+            let _unreachable = ResponseStatus::NetworkUnreachable;
+            let _error = ResponseStatus::Error("test error".to_string());
+
+            // Test other ParsedResponse variants
+            let _dns_resp = ParsedResponse::Dns { answers: vec!["1.2.3.4".to_string()] };
+            let _raw_resp = ParsedResponse::Raw { data: vec![0x00] };
+
+            // Test persistence
+            let entries = vec![http_entry.clone(), tcp_entry.clone()];
+            match RepeaterEntry::save_entries(&entries, None) {
+                Ok(_) => app.log_success(format!("Saved {} repeater entries to {:?}",
+                    entries.len(), RepeaterEntry::default_file_path())),
+                Err(e) => app.log_error(format!("Failed to save entries: {}", e)),
+            }
+
+            // Add entries to app state
+            app.repeater_entries.push(http_entry);
+            app.repeater_entries.push(tcp_entry);
+            app.repeater_selected = 0;
+            app.repeater_pane_focus = RepeaterPane::List;
+            app.show_repeater = true;
+
+            app.log_success("Repeater test complete. Use 'R' to toggle repeater view.");
         }
         "retrystats" => {
             // Test retry tracking using PacketStats
@@ -2054,6 +2554,105 @@ async fn execute_command(app: &mut App, command: &str) {
                 description: "Test preset".to_string(),
             };
             app.log_info(format!("Preset: {} ({}) - {}", preset.name, preset.protocol, preset.description));
+        }
+        "httpconfig" => {
+            // Test HTTP configuration features (curl-inspired)
+            use crate::network::http::{
+                HttpConfig, HttpAuth, HttpTimeoutConfig, HttpRetryConfig,
+                HttpCookie, CookieJar,
+            };
+
+            // Test HttpTimeoutConfig
+            let timeout = HttpTimeoutConfig::default();
+            app.log_debug(format!("Timeout: connect={}ms max={}ms dns={}ms",
+                timeout.connect_timeout_ms, timeout.max_time_ms, timeout.dns_timeout_ms));
+
+            // Test HttpRetryConfig and delay_for_retry
+            let retry = HttpRetryConfig::default();
+            let delay0 = retry.delay_for_retry(0);
+            let delay1 = retry.delay_for_retry(1);
+            let delay2 = retry.delay_for_retry(2);
+            app.log_debug(format!("Retry: max={} delay={}ms exp_backoff={} (delays: {}/{}/{})",
+                retry.max_retries, retry.retry_delay_ms, retry.exponential_backoff,
+                delay0, delay1, delay2));
+            app.log_debug(format!("Retry conditions: max_time={}ms on_timeout={} on_refused={}",
+                retry.retry_max_time_ms, retry.retry_on_timeout, retry.retry_on_connection_refused));
+
+            // Test HttpAuth variants
+            let basic_auth = HttpAuth::basic("user", "pass");
+            let bearer_auth = HttpAuth::bearer("token123");
+            let digest_auth = HttpAuth::digest("user", "pass");
+            app.log_debug(format!("Auth headers: Basic={:?} Bearer={:?} Digest={:?}",
+                basic_auth.to_header_value(),
+                bearer_auth.to_header_value(),
+                digest_auth.to_header_value()));
+
+            // Access Digest variant fields
+            if let HttpAuth::Digest { username, password } = &digest_auth {
+                app.log_debug(format!("Digest auth: user='{}' pass_len={}", username, password.len()));
+            }
+
+            // Test Basic auth header value
+            let basic_header = HttpAuth::basic_header_value("testuser", "testpass");
+            app.log_debug(format!("Basic auth header: {}", basic_header));
+
+            // Test HttpCookie
+            let mut cookie = HttpCookie::new("session", "abc123");
+            cookie.expires = Some(chrono::Utc::now() + chrono::Duration::hours(1));
+            let parsed_cookie = HttpCookie::parse("SESSID=xyz789; Path=/; HttpOnly; Secure");
+            app.log_debug(format!("Cookie: {} expires={:?} parsed={:?}",
+                cookie.to_header_value(),
+                cookie.expires.map(|e| e.format("%H:%M:%S").to_string()),
+                parsed_cookie.as_ref().map(|c| (c.name.clone(), c.secure, c.http_only))));
+
+            // Test CookieJar
+            let mut jar = CookieJar::new();
+            jar.set(HttpCookie::new("token", "abc"));
+            jar.set(HttpCookie::new("user", "bob"));
+            let jar_header = jar.to_header_value();
+            let jar_len = jar.len();
+            let jar_empty = jar.is_empty();
+            let _got = jar.get("token");
+            let _removed = jar.remove("user");
+            app.log_debug(format!("CookieJar: len={} empty={} header='{}'", jar_len, jar_empty, jar_header));
+
+            // Test update_from_headers
+            let mut headers = std::collections::HashMap::new();
+            headers.insert("Set-Cookie".to_string(), "newsession=xyz; Path=/".to_string());
+            jar.update_from_headers(&headers);
+            jar.clear();
+            app.log_debug(format!("CookieJar after update/clear: empty={}", jar.is_empty()));
+
+            // Test HttpConfig builder pattern with basic auth
+            let config = HttpConfig::new()
+                .connect_timeout(5000)
+                .max_time(15000)
+                .retries(3)
+                .basic_auth("user", "pass")
+                .follow(true)
+                .user_agent("TestAgent/1.0")
+                .header("X-Custom", "value")
+                .referer("https://example.com")
+                .cookie("sid", "test123");
+
+            // Also test bearer_auth
+            let bearer_config = HttpConfig::new()
+                .bearer_auth("secret_token_xyz")
+                .follow(false);
+            app.log_debug(format!("Bearer config auth set: {}", bearer_config.auth.is_some()));
+
+            app.log_debug(format!("HttpConfig: ua='{}' follow={} max_redirects={} http10={} no_keepalive={}",
+                config.user_agent, config.follow_redirects, config.max_redirects,
+                config.http10, config.no_keepalive));
+
+            // Test apply_to_request
+            let mut request = HttpRequest::get("/api/test")
+                .header("Host", "example.com");
+            config.apply_to_request(&mut request);
+            app.log_debug(format!("Request headers after config apply: {} headers",
+                request.headers.len()));
+
+            app.log_success("HTTP config test complete. All features exercised.");
         }
         "flood" => {
             // Flood mode like hping3 --flood
@@ -2276,6 +2875,437 @@ fn complete_command(app: &mut App) {
     if let Some(completion) = commands.iter().find(|c| c.starts_with(prefix)) {
         app.command_buffer = completion.to_string();
     }
+}
+
+/// Result of sending a repeater request
+struct RepeaterSendResult {
+    status: crate::app::ResponseStatus,
+    raw_data: Vec<u8>,
+    parsed: Option<crate::app::ParsedResponse>,
+}
+
+/// Send a repeater request and return the result
+async fn send_repeater_request(
+    sender: &crate::network::sender::PacketSender,
+    ip: std::net::IpAddr,
+    port: u16,
+    request: &crate::app::RepeaterRequest,
+    app: &mut App,
+) -> RepeaterSendResult {
+    use crate::app::{ResponseStatus, ParsedResponse, RepeaterRequest};
+
+    match request {
+        RepeaterRequest::Http { method, path, headers, body } => {
+            // Record outgoing request in capture
+            app.capture_packet(
+                PacketDirection::Sent,
+                Protocol::Http,
+                None,
+                None,
+                Some(ip),
+                Some(port),
+                vec![],
+                0,
+                None,
+                None,
+                method.as_bytes(),
+                None,
+                format!("{} {}", method, path),
+            );
+
+            match sender.send_http_request(ip, port, method, path, headers, body.as_deref()).await {
+                Ok((response_bytes, duration)) => {
+                    let rtt_ms = duration.as_secs_f64() * 1000.0;
+
+                    // Parse HTTP response
+                    let parsed = parse_http_response(&response_bytes);
+
+                    // Record response in capture
+                    let status_str = if let Some(ParsedResponse::Http { status_code, status_text, .. }) = &parsed {
+                        format!("HTTP {} {}", status_code, status_text)
+                    } else {
+                        "Response received".to_string()
+                    };
+
+                    app.capture_packet(
+                        PacketDirection::Received,
+                        Protocol::Http,
+                        Some(ip),
+                        Some(port),
+                        None,
+                        None,
+                        vec![],
+                        0,
+                        None,
+                        None,
+                        &response_bytes[..response_bytes.len().min(100)],
+                        Some(rtt_ms),
+                        status_str,
+                    );
+
+                    RepeaterSendResult {
+                        status: ResponseStatus::Success,
+                        raw_data: response_bytes,
+                        parsed,
+                    }
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    let status = if err_str.contains("timed out") || err_str.contains("timeout") {
+                        ResponseStatus::Timeout
+                    } else if err_str.contains("refused") {
+                        ResponseStatus::ConnectionRefused
+                    } else if err_str.contains("unreachable") {
+                        ResponseStatus::NetworkUnreachable
+                    } else {
+                        ResponseStatus::Error(err_str)
+                    };
+
+                    RepeaterSendResult {
+                        status,
+                        raw_data: vec![],
+                        parsed: None,
+                    }
+                }
+            }
+        }
+
+        RepeaterRequest::Tcp { flags, seq_num: _, ack_num: _, window_size: _, payload } => {
+            // For TCP, use connect scan to test connectivity
+            let tcp_flags: Vec<TcpFlag> = {
+                let mut f = vec![];
+                if flags & 0x02 != 0 { f.push(TcpFlag::Syn); }
+                if flags & 0x10 != 0 { f.push(TcpFlag::Ack); }
+                if flags & 0x01 != 0 { f.push(TcpFlag::Fin); }
+                if flags & 0x04 != 0 { f.push(TcpFlag::Rst); }
+                if flags & 0x08 != 0 { f.push(TcpFlag::Psh); }
+                if flags & 0x20 != 0 { f.push(TcpFlag::Urg); }
+                f
+            };
+
+            app.capture_packet(
+                PacketDirection::Sent,
+                Protocol::Tcp,
+                None,
+                None,
+                Some(ip),
+                Some(port),
+                tcp_flags.clone(),
+                0,
+                None,
+                None,
+                payload,
+                None,
+                format!("TCP flags=0x{:02X}", flags),
+            );
+
+            let responses = sender.send_batch(ip, &[port], ScanType::ConnectScan, &tcp_flags).await;
+
+            if let Some(resp) = responses.first() {
+                let status = match resp.status {
+                    crate::network::packet::ResponseStatus::Open => ResponseStatus::Success,
+                    crate::network::packet::ResponseStatus::Closed => ResponseStatus::ConnectionRefused,
+                    crate::network::packet::ResponseStatus::Filtered => ResponseStatus::Timeout,
+                    _ => ResponseStatus::Error("Unknown".to_string()),
+                };
+
+                app.capture_packet(
+                    PacketDirection::Received,
+                    Protocol::Tcp,
+                    Some(ip),
+                    Some(port),
+                    None,
+                    None,
+                    resp.flags_received.clone().unwrap_or_default(),
+                    0,
+                    None,
+                    None,
+                    &[],
+                    resp.rtt_ms,
+                    format!("{:?}", resp.status),
+                );
+
+                RepeaterSendResult {
+                    status,
+                    raw_data: resp.raw_response.clone().unwrap_or_default(),
+                    parsed: Some(ParsedResponse::Raw {
+                        data: resp.raw_response.clone().unwrap_or_default(),
+                    }),
+                }
+            } else {
+                RepeaterSendResult {
+                    status: ResponseStatus::Error("No response".to_string()),
+                    raw_data: vec![],
+                    parsed: None,
+                }
+            }
+        }
+
+        RepeaterRequest::Udp { payload } => {
+            app.capture_packet(
+                PacketDirection::Sent,
+                Protocol::Udp,
+                None,
+                None,
+                Some(ip),
+                Some(port),
+                vec![],
+                0,
+                None,
+                None,
+                payload,
+                None,
+                format!("UDP {} bytes", payload.len()),
+            );
+
+            let responses = sender.udp_scan(ip, &[port]).await;
+
+            if let Some(resp) = responses.first() {
+                let status = match resp.status {
+                    crate::network::packet::ResponseStatus::Open => ResponseStatus::Success,
+                    crate::network::packet::ResponseStatus::Closed => ResponseStatus::ConnectionRefused,
+                    _ => ResponseStatus::Timeout,
+                };
+
+                app.capture_packet(
+                    PacketDirection::Received,
+                    Protocol::Udp,
+                    Some(ip),
+                    Some(port),
+                    None,
+                    None,
+                    vec![],
+                    0,
+                    None,
+                    None,
+                    resp.raw_response.as_ref().map(|r| r.as_slice()).unwrap_or(&[]),
+                    resp.rtt_ms,
+                    format!("{:?}", resp.status),
+                );
+
+                RepeaterSendResult {
+                    status,
+                    raw_data: resp.raw_response.clone().unwrap_or_default(),
+                    parsed: Some(ParsedResponse::Raw {
+                        data: resp.raw_response.clone().unwrap_or_default(),
+                    }),
+                }
+            } else {
+                RepeaterSendResult {
+                    status: ResponseStatus::Timeout,
+                    raw_data: vec![],
+                    parsed: None,
+                }
+            }
+        }
+
+        RepeaterRequest::Dns { query_type, domain } => {
+            app.capture_packet(
+                PacketDirection::Sent,
+                Protocol::Dns,
+                None,
+                None,
+                Some(ip),
+                Some(port),
+                vec![],
+                0,
+                None,
+                None,
+                domain.as_bytes(),
+                None,
+                format!("DNS {} query for {}", query_type, domain),
+            );
+
+            let responses = sender.send_dns_batch(ip, domain, *query_type, 1).await;
+
+            if let Some(resp) = responses.first() {
+                let status = match resp.status {
+                    crate::network::packet::ResponseStatus::Open => ResponseStatus::Success,
+                    crate::network::packet::ResponseStatus::Error => {
+                        ResponseStatus::Error(resp.error.clone().unwrap_or_default())
+                    }
+                    _ => ResponseStatus::Timeout,
+                };
+
+                // Parse DNS answers (simplified)
+                let answers = resp.raw_response.as_ref()
+                    .map(|_| vec!["(DNS response received)".to_string()])
+                    .unwrap_or_default();
+
+                app.capture_packet(
+                    PacketDirection::Received,
+                    Protocol::Dns,
+                    Some(ip),
+                    Some(port),
+                    None,
+                    None,
+                    vec![],
+                    0,
+                    None,
+                    None,
+                    resp.raw_response.as_ref().map(|r| r.as_slice()).unwrap_or(&[]),
+                    resp.rtt_ms,
+                    format!("{:?}", resp.status),
+                );
+
+                RepeaterSendResult {
+                    status,
+                    raw_data: resp.raw_response.clone().unwrap_or_default(),
+                    parsed: Some(ParsedResponse::Dns { answers }),
+                }
+            } else {
+                RepeaterSendResult {
+                    status: ResponseStatus::Timeout,
+                    raw_data: vec![],
+                    parsed: None,
+                }
+            }
+        }
+
+        RepeaterRequest::Icmp { icmp_type, icmp_code, id, seq } => {
+            app.capture_packet(
+                PacketDirection::Sent,
+                Protocol::Icmp,
+                None,
+                None,
+                Some(ip),
+                None,
+                vec![],
+                0,
+                None,
+                None,
+                &[*icmp_type, *icmp_code],
+                None,
+                format!("ICMP type={} code={} id={} seq={}", icmp_type, icmp_code, id, seq),
+            );
+
+            let responses = sender.send_icmp_batch(&[ip], *icmp_type, *icmp_code, *id, *seq).await;
+
+            if let Some(resp) = responses.first() {
+                let status = match resp.status {
+                    crate::network::packet::ResponseStatus::Open => ResponseStatus::Success,
+                    crate::network::packet::ResponseStatus::NoResponse => ResponseStatus::Timeout,
+                    _ => ResponseStatus::Error("Unknown".to_string()),
+                };
+
+                app.capture_packet(
+                    PacketDirection::Received,
+                    Protocol::Icmp,
+                    Some(ip),
+                    None,
+                    None,
+                    None,
+                    vec![],
+                    0,
+                    None,
+                    None,
+                    &[],
+                    resp.rtt_ms,
+                    format!("{:?}", resp.status),
+                );
+
+                RepeaterSendResult {
+                    status,
+                    raw_data: vec![],
+                    parsed: Some(ParsedResponse::Raw { data: vec![] }),
+                }
+            } else {
+                RepeaterSendResult {
+                    status: ResponseStatus::Timeout,
+                    raw_data: vec![],
+                    parsed: None,
+                }
+            }
+        }
+
+        RepeaterRequest::Raw { data } => {
+            app.capture_packet(
+                PacketDirection::Sent,
+                Protocol::Raw,
+                None,
+                None,
+                Some(ip),
+                Some(port),
+                vec![],
+                0,
+                None,
+                None,
+                data,
+                None,
+                format!("Raw {} bytes", data.len()),
+            );
+
+            // For raw, just try TCP connect
+            let responses = sender.send_batch(ip, &[port], ScanType::ConnectScan, &[]).await;
+
+            if let Some(resp) = responses.first() {
+                let status = match resp.status {
+                    crate::network::packet::ResponseStatus::Open => ResponseStatus::Success,
+                    _ => ResponseStatus::Error("Connection failed".to_string()),
+                };
+
+                RepeaterSendResult {
+                    status,
+                    raw_data: resp.raw_response.clone().unwrap_or_default(),
+                    parsed: Some(ParsedResponse::Raw {
+                        data: resp.raw_response.clone().unwrap_or_default(),
+                    }),
+                }
+            } else {
+                RepeaterSendResult {
+                    status: ResponseStatus::Error("No response".to_string()),
+                    raw_data: vec![],
+                    parsed: None,
+                }
+            }
+        }
+    }
+}
+
+/// Parse HTTP response bytes into a ParsedResponse
+fn parse_http_response(bytes: &[u8]) -> Option<crate::app::ParsedResponse> {
+    use crate::app::ParsedResponse;
+
+    let response_str = std::str::from_utf8(bytes).ok()?;
+    let mut lines = response_str.lines();
+
+    // Parse status line
+    let status_line = lines.next()?;
+    let parts: Vec<&str> = status_line.splitn(3, ' ').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+
+    let status_code = parts[1].parse::<u16>().ok()?;
+    let status_text = parts.get(2).unwrap_or(&"").to_string();
+
+    // Parse headers
+    let mut headers = std::collections::HashMap::new();
+
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            headers.insert(key.trim().to_string(), value.trim().to_string());
+        }
+    }
+
+    // Find body (after \r\n\r\n or \n\n)
+    let body = if let Some(pos) = response_str.find("\r\n\r\n") {
+        Some(bytes[pos + 4..].to_vec())
+    } else if let Some(pos) = response_str.find("\n\n") {
+        Some(bytes[pos + 2..].to_vec())
+    } else {
+        None
+    };
+
+    Some(ParsedResponse::Http {
+        status_code,
+        status_text,
+        headers,
+        body,
+    })
 }
 
 #[cfg(test)]

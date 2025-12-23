@@ -1,10 +1,8 @@
 # NoirCast
 
-A high-performance TUI-based packet crafting and network security tool written in Rust.
-
 ## Overview
 
-NoirCast is a powerful command-line tool for network security professionals, penetration testers, and security researchers. It provides an intuitive vim-like interface for crafting and sending custom network packets with real-time response tracking.
+NoirCast is a powerful TUI for network security professionals, penetration testers, and security researchers. It provides an intuitive vim-like interface for crafting and sending custom network packets with real-time response tracking.
 
 ## Features
 
@@ -209,50 +207,6 @@ Enter command mode with `:` and type:
 | `:help` | Show help |
 | `:quit` | Exit |
 
-## Architecture
-
-```
-src/
-  app.rs          - Application state management
-  cli.rs          - Command-line argument parsing
-  config.rs       - Configuration and protocol definitions
-  logging.rs      - Logging configuration with tracing
-  main.rs         - Application entry point
-  lib.rs          - Library exports for benchmarks
-
-  network/
-    mod.rs        - Network module exports
-    sender.rs     - Packet sending logic with raw socket support
-    raw_socket.rs - Raw socket capability detection
-    batch_sender.rs - High-performance batch sending
-    packet.rs     - Packet construction (TCP, UDP, ICMP)
-    http.rs       - HTTP request/response handling
-    protocols/
-      mod.rs      - Protocol module exports
-      dns.rs      - DNS query builder
-      ntp.rs      - NTP packet builder
-      snmp.rs     - SNMP request builder
-      ssdp.rs     - SSDP request builder
-      arp.rs      - ARP packet builder
-      netbios.rs  - NetBIOS Name Service builder
-      smb.rs      - SMB negotiate packet builder
-      ldap.rs     - LDAP search request builder
-      dhcp.rs     - DHCP discover packet builder
-      kerberos.rs - Kerberos AS-REQ builder
-      services.rs - Common service port mappings
-
-  tui/
-    mod.rs        - Terminal UI main loop
-    handler.rs    - Keyboard/mouse event handling
-
-  ui/
-    mod.rs        - UI rendering with ratatui
-    help.rs       - Help system and key hints
-    widgets.rs    - Custom UI widgets
-    packet_editor.rs - Packet metadata editor popup
-    protocol_picker.rs - Protocol selection popup
-```
-
 ## Dependencies
 
 Key external dependencies:
@@ -280,7 +234,7 @@ This tool is designed for authorized security testing and educational purposes:
 
 Contributions are welcome. Please ensure:
 
-1. Code compiles with no warnings (`cargo build` should be clean)
+1. Code compiles with no warnings (`cargo build` should be clean) unless there are special exceptions.
 2. All tests pass (`cargo test`)
 3. Format code with `cargo fmt`
 4. Run clippy checks (`cargo clippy`)
@@ -291,7 +245,7 @@ MIT License - See LICENSE file for details.
 
 ## Author
 
-NoirCast Contributors
+0x00nier
 
 ---
 

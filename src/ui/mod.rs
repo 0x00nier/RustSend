@@ -5,6 +5,10 @@
 mod help;
 mod packet_editor;
 mod protocol_picker;
+mod repeater;
+mod template_picker;
+pub mod theme;
+mod theme_picker;
 pub mod widgets;
 
 use crate::app::{ActivePane, App, HttpDirection, InputMode, LogLevel, PacketDirection};
@@ -14,7 +18,7 @@ use crate::network::packet::format_flags;
 use crate::network::protocols::get_service_name;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Modifier, Style, Stylize},
     symbols,
     text::{Line, Span},
     widgets::{
@@ -26,24 +30,15 @@ use ratatui::{
 
 // Color scheme: minimal dark with neon green accents
 // Using RGB(0,0,0) for true black background
-const BG_COLOR: Color = Color::Rgb(0, 0, 0);            // True black
-const FG_PRIMARY: Color = Color::White;
-const FG_SECONDARY: Color = Color::Rgb(128, 128, 128);  // Gray
-const FG_DIM: Color = Color::Rgb(80, 80, 80);           // Dark gray (increased from 60 for better readability)
-const FG_HINT: Color = Color::Rgb(120, 120, 120);       // Lighter gray for help hints
-const ACCENT: Color = Color::Rgb(80, 200, 100);         // Dull neon green
-const ACCENT_BRIGHT: Color = Color::Rgb(100, 255, 120); // Brighter green for highlights
-const BORDER_ACTIVE: Color = Color::Rgb(80, 200, 100);  // Green border when active
-const BORDER_INACTIVE: Color = Color::Rgb(40, 40, 40);  // Dark border
-const SUCCESS: Color = Color::Rgb(80, 200, 100);        // Green
-const WARNING: Color = Color::Rgb(200, 180, 80);        // Muted yellow
-const ERROR: Color = Color::Rgb(200, 80, 80);           // Muted red
-const INFO: Color = Color::Rgb(100, 150, 200);          // Muted blue
+// Color constants removed - now using dynamic theme colors via app.current_theme.colors()
 
 /// Main render function
 pub fn render(frame: &mut Frame, app: &App) {
-    // Fill entire background with black
-    let bg_block = Block::default().style(Style::default().bg(BG_COLOR));
+    // Get theme colors
+    let theme = app.current_theme.colors();
+
+    // Fill entire background with theme background
+    let bg_block = Block::default().style(Style::default().bg(theme.bg));
     frame.render_widget(bg_block, frame.area());
 
     // Create main layout
@@ -92,10 +87,27 @@ pub fn render(frame: &mut Frame, app: &App) {
     if app.show_protocol_picker {
         protocol_picker::render_protocol_picker(frame, app);
     }
+
+    // Render template picker popup if active
+    if app.show_template_picker {
+        template_picker::render_template_picker(frame, app);
+    }
+
+    // Render theme picker popup if active
+    if app.show_theme_picker {
+        theme_picker::render_theme_picker(frame, app);
+    }
+
+    // Render repeater overlay if active
+    if app.show_repeater {
+        repeater::render_repeater(frame, app);
+    }
 }
 
 /// Render the header with title and tabs
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
+
     let header_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -108,17 +120,17 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     // Title
     let title = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled("◆ ", Style::default().fg(ACCENT)),
-            Span::styled("NoirCast", Style::default().fg(FG_PRIMARY).bold()),
-            Span::styled(" v0.1", Style::default().fg(FG_DIM)),
+            Span::styled("◆ ", Style::default().fg(colors.accent)),
+            Span::styled("NoirCast", Style::default().fg(colors.fg_primary).bold()),
+            Span::styled(" v0.1", Style::default().fg(colors.fg_dim)),
         ]),
     ])
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(BORDER_INACTIVE))
-            .style(Style::default().bg(BG_COLOR)),
+            .border_style(Style::default().fg(colors.border_inactive))
+            .style(Style::default().bg(colors.bg)),
     );
     frame.render_widget(title, header_chunks[0]);
 
@@ -152,15 +164,15 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(" Protocol ")
-                .title_style(Style::default().fg(FG_PRIMARY))
-                .border_style(Style::default().fg(BORDER_INACTIVE))
-                .style(Style::default().bg(BG_COLOR)),
+                .title_style(Style::default().fg(colors.fg_primary))
+                .border_style(Style::default().fg(colors.border_inactive))
+                .style(Style::default().bg(colors.bg)),
         )
         .select(selected_idx)
-        .style(Style::default().fg(FG_SECONDARY))
+        .style(Style::default().fg(colors.fg_secondary))
         .highlight_style(
             Style::default()
-                .fg(ACCENT_BRIGHT)
+                .fg(colors.accent_bright)
                 .add_modifier(Modifier::BOLD),
         )
         .divider(symbols::DOT);
@@ -185,8 +197,8 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let mode_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(BORDER_INACTIVE))
-        .style(Style::default().bg(BG_COLOR));
+        .border_style(Style::default().fg(colors.border_inactive))
+        .style(Style::default().bg(colors.bg));
     frame.render_widget(mode_block, header_chunks[2]);
 
     let mode_text = format!("{}", app.input_mode);
@@ -233,8 +245,9 @@ fn render_main_content(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render packet configuration pane (protocol-aware)
 fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::PacketConfig;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     let title = match app.selected_protocol {
         Protocol::Tcp => " TCP Config ",
@@ -256,11 +269,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR))
+        .style(Style::default().bg(colors.bg))
         .padding(Padding::horizontal(1));
 
     let inner = block.inner(area);
@@ -292,24 +305,24 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
 
                     let marker = if is_selected { "●" } else { "○" };
                     let marker_style = if is_selected {
-                        Style::default().fg(ACCENT_BRIGHT).bold()
+                        Style::default().fg(colors.accent_bright).bold()
                     } else {
-                        Style::default().fg(FG_DIM)
+                        Style::default().fg(colors.fg_dim)
                     };
 
                     let name_style = if is_selected {
-                        Style::default().fg(ACCENT_BRIGHT).bold()
+                        Style::default().fg(colors.accent_bright).bold()
                     } else if is_cursor {
-                        Style::default().fg(FG_PRIMARY)
+                        Style::default().fg(colors.fg_primary)
                     } else {
-                        Style::default().fg(FG_SECONDARY)
+                        Style::default().fg(colors.fg_secondary)
                     };
 
                     let shortcut = scan_type_shortcuts.get(i).unwrap_or(&"");
-                    let shortcut_style = Style::default().fg(FG_DIM);
+                    let shortcut_style = Style::default().fg(colors.fg_dim);
 
                     let line_style = if is_cursor {
-                        Style::default().bg(FG_DIM)
+                        Style::default().bg(colors.fg_dim)
                     } else {
                         Style::default()
                     };
@@ -317,14 +330,14 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                     ListItem::new(Line::from(vec![
                         Span::styled(format!("{} ", marker), marker_style),
                         Span::styled(format!("{:10}", st.name()), name_style),
-                        Span::styled(format!(" {} ", st.description()), Style::default().fg(FG_HINT)),
+                        Span::styled(format!(" {} ", st.description()), Style::default().fg(colors.fg_hint)),
                         Span::styled(format!("[{}]", shortcut), shortcut_style),
                     ]).style(line_style))
                 })
                 .collect();
 
             let list = List::new(scan_types).block(Block::default().title("Scan Types").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -342,11 +355,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -355,7 +368,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("ICMP Type").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -374,11 +387,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -387,7 +400,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("DNS Query Type").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -399,11 +412,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -412,7 +425,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("HTTP Method").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -434,13 +447,13 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 .map(|(i, tmpl)| {
                     let is_cursor = is_active && i == app.scan_type_index;
                     let style = if is_cursor {
-                        Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                        Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                     } else {
-                        Style::default().fg(FG_SECONDARY)
+                        Style::default().fg(colors.fg_secondary)
                     };
                     ListItem::new(Line::from(vec![
                         Span::styled(format!("{:10}", tmpl.name()), style),
-                        Span::styled(format!(" [{}]", tmpl.shortcut()), Style::default().fg(FG_DIM)),
+                        Span::styled(format!(" [{}]", tmpl.shortcut()), Style::default().fg(colors.fg_dim)),
                     ]))
                 }).collect();
 
@@ -451,7 +464,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             let list = List::new(items).block(Block::default().title(title).title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -462,11 +475,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -475,7 +488,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Version").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -486,11 +499,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -499,7 +512,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Search Target").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -510,11 +523,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -523,7 +536,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("SMB Version").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -534,11 +547,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -547,7 +560,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Search Scope").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -558,11 +571,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -571,7 +584,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Query Type").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -582,11 +595,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -595,7 +608,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Message Type").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -606,11 +619,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -619,7 +632,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Request Type").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -630,11 +643,11 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
                 let is_cursor = is_active && i == app.scan_type_index;
                 let marker = if is_selected { "●" } else { "○" };
                 let style = if is_selected {
-                    Style::default().fg(ACCENT_BRIGHT).bold()
+                    Style::default().fg(colors.accent_bright).bold()
                 } else if is_cursor {
-                    Style::default().fg(FG_PRIMARY).bg(FG_DIM)
+                    Style::default().fg(colors.fg_primary).bg(colors.fg_dim)
                 } else {
-                    Style::default().fg(FG_SECONDARY)
+                    Style::default().fg(colors.fg_secondary)
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(format!("{} ", marker), style),
@@ -643,7 +656,7 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
             }).collect();
 
             let list = List::new(items).block(Block::default().title("Operation").title_style(
-                Style::default().fg(FG_SECONDARY).add_modifier(Modifier::DIM),
+                Style::default().fg(colors.fg_secondary).add_modifier(Modifier::DIM),
             ));
             frame.render_widget(list, inner);
         }
@@ -652,16 +665,17 @@ fn render_packet_config(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render TCP flag selection pane
 fn render_flag_selection(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::FlagSelection;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     let block = Block::default()
         .title(" TCP Flags ")
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR))
+        .style(Style::default().bg(colors.bg))
         .padding(Padding::horizontal(1));
 
     let inner = block.inner(area);
@@ -677,13 +691,13 @@ fn render_flag_selection(frame: &mut Frame, app: &App, area: Rect) {
 
             let checkbox = if is_selected { "[x]" } else { "[ ]" };
             let flag_style = if is_selected {
-                Style::default().fg(ACCENT_BRIGHT).bold()
+                Style::default().fg(colors.accent_bright).bold()
             } else {
-                Style::default().fg(FG_SECONDARY)
+                Style::default().fg(colors.fg_secondary)
             };
 
             let line_style = if is_cursor {
-                Style::default().bg(FG_DIM)
+                Style::default().bg(colors.fg_dim)
             } else {
                 Style::default()
             };
@@ -692,8 +706,8 @@ fn render_flag_selection(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(checkbox, flag_style),
                 Span::styled(" ", Style::default()),
                 Span::styled(flag.name(), flag_style),
-                Span::styled(" - ", Style::default().fg(FG_HINT)),
-                Span::styled(flag.description(), Style::default().fg(FG_HINT)),
+                Span::styled(" - ", Style::default().fg(colors.fg_hint)),
+                Span::styled(flag.description(), Style::default().fg(colors.fg_hint)),
             ]).style(line_style))
         })
         .collect();
@@ -704,16 +718,17 @@ fn render_flag_selection(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render target configuration pane (protocol-aware)
 fn render_target_config(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::TargetConfig;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     let block = Block::default()
         .title(" Target ")
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR))
+        .style(Style::default().bg(colors.bg))
         .padding(Padding::horizontal(1));
 
     let inner = block.inner(area);
@@ -728,13 +743,13 @@ fn render_target_config(frame: &mut Frame, app: &App, area: Rect) {
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Host:   ", Style::default().fg(FG_PRIMARY).bold()),
+            Span::styled("Host:   ", Style::default().fg(colors.fg_primary).bold()),
             Span::styled(
                 &host_display,
                 Style::default().fg(if app.target.host.is_empty() {
-                    FG_DIM
+                    colors.fg_dim
                 } else {
-                    ACCENT
+                    colors.accent
                 }),
             ),
         ]),
@@ -757,89 +772,89 @@ fn render_target_config(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 format!("{} ports", app.target.ports.len())
             };
-            let port_color = if app.target.ports.is_empty() { FG_DIM } else { ACCENT };
+            let port_color = if app.target.ports.is_empty() { colors.fg_dim } else { colors.accent };
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
                 Span::styled(port_display, Style::default().fg(port_color)),
             ]));
         }
         Protocol::Icmp => {
             // ICMP: show type/code instead of port
             lines.push(Line::from(vec![
-                Span::styled("Type:   ", Style::default().fg(FG_PRIMARY).bold()),
+                Span::styled("Type:   ", Style::default().fg(colors.fg_primary).bold()),
                 Span::styled(
                     format!("{} ({})", icmp_type_name(app.icmp_type), app.icmp_type),
-                    Style::default().fg(ACCENT),
+                    Style::default().fg(colors.accent),
                 ),
             ]));
         }
         Protocol::Dns => {
             // DNS: show port and query type
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("53", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("53", Style::default().fg(colors.accent)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Query:  ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled(dns_type_name(app.dns_query_type), Style::default().fg(ACCENT)),
+                Span::styled("Query:  ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled(dns_type_name(app.dns_query_type), Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Ntp => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("123", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("123", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Snmp => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("161", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("161", Style::default().fg(colors.accent)),
             ]));
             lines.push(Line::from(vec![
-                Span::styled("Comm:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled(&app.snmp_community, Style::default().fg(ACCENT)),
+                Span::styled("Comm:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled(&app.snmp_community, Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Ssdp => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("1900", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("1900", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Smb => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("445", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("445", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Ldap => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("389", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("389", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::NetBios => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("137", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("137", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Dhcp => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("67/68", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("67/68", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Kerberos => {
             lines.push(Line::from(vec![
-                Span::styled("Port:   ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("88", Style::default().fg(ACCENT)),
+                Span::styled("Port:   ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("88", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Arp => {
             lines.push(Line::from(vec![
-                Span::styled("Layer:  ", Style::default().fg(FG_PRIMARY).bold()),
-                Span::styled("L2 (Ethernet)", Style::default().fg(ACCENT)),
+                Span::styled("Layer:  ", Style::default().fg(colors.fg_primary).bold()),
+                Span::styled("L2 (Ethernet)", Style::default().fg(colors.accent)),
             ]));
         }
         Protocol::Raw => {}
@@ -848,31 +863,40 @@ fn render_target_config(frame: &mut Frame, app: &App, area: Rect) {
     // HTTP-specific
     if matches!(app.selected_protocol, Protocol::Http | Protocol::Https) {
         lines.push(Line::from(vec![
-            Span::styled("Method: ", Style::default().fg(FG_PRIMARY).bold()),
-            Span::styled(&app.http_method, Style::default().fg(ACCENT)),
+            Span::styled("Method: ", Style::default().fg(colors.fg_primary).bold()),
+            Span::styled(&app.http_method, Style::default().fg(colors.accent)),
         ]));
     }
 
     // Packet count
     lines.push(Line::from(vec![
-        Span::styled("Count:  ", Style::default().fg(FG_PRIMARY).bold()),
-        Span::styled(app.packet_count.to_string(), Style::default().fg(ACCENT)),
-        Span::styled(" pkt", Style::default().fg(FG_DIM)),
+        Span::styled("Count:  ", Style::default().fg(colors.fg_primary).bold()),
+        Span::styled(app.packet_count.to_string(), Style::default().fg(colors.accent)),
+        Span::styled(" pkt", Style::default().fg(colors.fg_dim)),
     ]));
 
-    // Help hint
+    // Help hints
     lines.push(Line::from(Span::styled("", Style::default())));
     lines.push(Line::from(vec![
-        Span::styled("'i' edit | ':flood'", Style::default().fg(FG_HINT)),
+        Span::styled("e", Style::default().fg(colors.accent)),
+        Span::styled(" edit  ", Style::default().fg(colors.fg_hint)),
+        Span::styled("T", Style::default().fg(colors.accent)),
+        Span::styled(" template", Style::default().fg(colors.fg_hint)),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("P", Style::default().fg(colors.accent)),
+        Span::styled(" proto  ", Style::default().fg(colors.fg_hint)),
+        Span::styled("R", Style::default().fg(colors.accent)),
+        Span::styled(" repeater", Style::default().fg(colors.fg_hint)),
     ]));
 
     // Show input buffer when in insert mode
     if app.input_mode == InputMode::Insert && is_active {
         lines.push(Line::from(Span::styled("", Style::default())));
         lines.push(Line::from(vec![
-            Span::styled("Input: ", Style::default().fg(ACCENT)),
-            Span::styled(&app.input_buffer, Style::default().fg(FG_PRIMARY)),
-            Span::styled("█", Style::default().fg(ACCENT_BRIGHT)),
+            Span::styled("Input: ", Style::default().fg(colors.accent)),
+            Span::styled(&app.input_buffer, Style::default().fg(colors.fg_primary)),
+            Span::styled("|", Style::default().fg(colors.accent_bright)),
         ]));
     }
 
@@ -906,18 +930,19 @@ fn dns_type_name(t: u16) -> &'static str {
 
 /// Render response log pane
 fn render_response_log(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::ResponseLog;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     // Use config's network timeout in title for context
     let timeout_ms = app.config.network.default_timeout_ms;
     let block = Block::default()
         .title(format!(" Responses ({}) [{}ms] ", app.logs.len(), timeout_ms))
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR));
+        .style(Style::default().bg(colors.bg));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -929,19 +954,19 @@ fn render_response_log(frame: &mut Frame, app: &App, area: Rect) {
         .skip(app.log_scroll)
         .map(|entry| {
             let level_style = match entry.level {
-                LogLevel::Info => Style::default().fg(INFO),
-                LogLevel::Success => Style::default().fg(SUCCESS),
-                LogLevel::Warning => Style::default().fg(WARNING),
-                LogLevel::Error => Style::default().fg(ERROR),
-                LogLevel::Debug => Style::default().fg(FG_SECONDARY),
+                LogLevel::Info => Style::default().fg(colors.info),
+                LogLevel::Success => Style::default().fg(colors.success),
+                LogLevel::Warning => Style::default().fg(colors.warning),
+                LogLevel::Error => Style::default().fg(colors.error),
+                LogLevel::Debug => Style::default().fg(colors.fg_secondary),
             };
 
             let time = entry.timestamp.format("%H:%M:%S").to_string();
 
             ListItem::new(Line::from(vec![
-                Span::styled(format!("{} ", time), Style::default().fg(FG_DIM)),
+                Span::styled(format!("{} ", time), Style::default().fg(colors.fg_dim)),
                 Span::styled(format!("{} ", entry.level.symbol()), level_style),
-                Span::styled(&entry.message, Style::default().fg(FG_PRIMARY)),
+                Span::styled(&entry.message, Style::default().fg(colors.fg_primary)),
             ]))
         })
         .collect();
@@ -952,16 +977,17 @@ fn render_response_log(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render packet capture pane
 fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::PacketCapture;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     let block = Block::default()
         .title(format!(" Packet Capture ({}) ", app.captured_packets.len()))
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR));
+        .style(Style::default().bg(colors.bg));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -969,7 +995,7 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
     if app.captured_packets.is_empty() {
         let empty = Paragraph::new(Line::from(vec![Span::styled(
             "No packets captured yet. Press 's' to send packets.",
-            Style::default().fg(FG_DIM),
+            Style::default().fg(colors.fg_dim),
         )]))
         .alignment(Alignment::Center);
         frame.render_widget(empty, inner);
@@ -978,13 +1004,13 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
 
     // Header row
     let header = Row::new(vec![
-        Cell::from("ID").style(Style::default().fg(FG_SECONDARY).bold()),
-        Cell::from("Dir").style(Style::default().fg(FG_SECONDARY).bold()),
-        Cell::from("Proto").style(Style::default().fg(FG_SECONDARY).bold()),
-        Cell::from("Source").style(Style::default().fg(FG_SECONDARY).bold()),
-        Cell::from("Dest").style(Style::default().fg(FG_SECONDARY).bold()),
-        Cell::from("Flags").style(Style::default().fg(FG_SECONDARY).bold()),
-        Cell::from("Status").style(Style::default().fg(FG_SECONDARY).bold()),
+        Cell::from("ID").style(Style::default().fg(colors.fg_secondary).bold()),
+        Cell::from("Dir").style(Style::default().fg(colors.fg_secondary).bold()),
+        Cell::from("Proto").style(Style::default().fg(colors.fg_secondary).bold()),
+        Cell::from("Source").style(Style::default().fg(colors.fg_secondary).bold()),
+        Cell::from("Dest").style(Style::default().fg(colors.fg_secondary).bold()),
+        Cell::from("Flags").style(Style::default().fg(colors.fg_secondary).bold()),
+        Cell::from("Status").style(Style::default().fg(colors.fg_secondary).bold()),
     ])
     .height(1);
 
@@ -995,18 +1021,18 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
         .skip(app.capture_scroll)
         .map(|pkt| {
             let dir_style = match pkt.direction {
-                PacketDirection::Sent => Style::default().fg(ACCENT),
-                PacketDirection::Received => Style::default().fg(SUCCESS),
+                PacketDirection::Sent => Style::default().fg(colors.accent),
+                PacketDirection::Received => Style::default().fg(colors.success),
             };
 
             let status_style = if pkt.status.contains("Open") || pkt.status.contains("OK") {
-                Style::default().fg(SUCCESS)
+                Style::default().fg(colors.success)
             } else if pkt.status.contains("Closed") || pkt.status.contains("Refused") {
-                Style::default().fg(WARNING)
+                Style::default().fg(colors.warning)
             } else if pkt.status.contains("Error") || pkt.status.contains("Timeout") {
-                Style::default().fg(ERROR)
+                Style::default().fg(colors.error)
             } else {
-                Style::default().fg(FG_PRIMARY)
+                Style::default().fg(colors.fg_primary)
             };
 
             let source = format!(
@@ -1032,12 +1058,12 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             Row::new(vec![
-                Cell::from(format!("{:04}", pkt.id)).style(Style::default().fg(FG_DIM)),
+                Cell::from(format!("{:04}", pkt.id)).style(Style::default().fg(colors.fg_dim)),
                 Cell::from(pkt.direction.to_string()).style(dir_style),
-                Cell::from(pkt.protocol.to_string()).style(Style::default().fg(ACCENT)),
-                Cell::from(source).style(Style::default().fg(FG_PRIMARY)),
-                Cell::from(dest).style(Style::default().fg(FG_PRIMARY)),
-                Cell::from(flags_str).style(Style::default().fg(ACCENT_BRIGHT)),
+                Cell::from(pkt.protocol.to_string()).style(Style::default().fg(colors.accent)),
+                Cell::from(source).style(Style::default().fg(colors.fg_primary)),
+                Cell::from(dest).style(Style::default().fg(colors.fg_primary)),
+                Cell::from(flags_str).style(Style::default().fg(colors.accent_bright)),
                 Cell::from(&*pkt.status).style(status_style),
             ])
         })
@@ -1056,8 +1082,8 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
         ],
     )
     .header(header)
-    .style(Style::default().fg(FG_PRIMARY))
-    .highlight_style(Style::default().bg(FG_DIM));
+    .style(Style::default().fg(colors.fg_primary))
+    .highlight_style(Style::default().bg(colors.fg_dim));
 
     frame.render_widget(table, inner);
 }
@@ -1065,16 +1091,17 @@ fn render_packet_capture(frame: &mut Frame, app: &App, area: Rect) {
 /// Render HTTP stream pane
 #[allow(dead_code)]
 fn render_http_stream(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::HttpStream;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     let block = Block::default()
         .title(format!(" HTTP Stream ({}) ", app.http_stream.len()))
-        .title_style(Style::default().fg(if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR));
+        .style(Style::default().bg(colors.bg));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1082,7 +1109,7 @@ fn render_http_stream(frame: &mut Frame, app: &App, area: Rect) {
     if app.http_stream.is_empty() {
         let empty = Paragraph::new(Line::from(vec![Span::styled(
             "No HTTP traffic captured",
-            Style::default().fg(FG_DIM),
+            Style::default().fg(colors.fg_dim),
         )]))
         .alignment(Alignment::Center);
         frame.render_widget(empty, inner);
@@ -1096,13 +1123,13 @@ fn render_http_stream(frame: &mut Frame, app: &App, area: Rect) {
         .skip(app.http_scroll)
         .map(|entry| {
             let direction_style = match entry.direction {
-                HttpDirection::Request => Style::default().fg(ACCENT),
-                HttpDirection::Response => Style::default().fg(SUCCESS),
+                HttpDirection::Request => Style::default().fg(colors.accent),
+                HttpDirection::Response => Style::default().fg(colors.success),
             };
 
             let direction_arrow = match entry.direction {
-                HttpDirection::Request => "→",
-                HttpDirection::Response => "←",
+                HttpDirection::Request => "->",
+                HttpDirection::Response => "<-",
             };
 
             let content = match entry.direction {
@@ -1121,10 +1148,10 @@ fn render_http_stream(frame: &mut Frame, app: &App, area: Rect) {
             ListItem::new(Line::from(vec![
                 Span::styled(
                     entry.timestamp.format("%H:%M:%S ").to_string(),
-                    Style::default().fg(FG_DIM),
+                    Style::default().fg(colors.fg_dim),
                 ),
                 Span::styled(format!("{} ", direction_arrow), direction_style),
-                Span::styled(content, Style::default().fg(FG_PRIMARY)),
+                Span::styled(content, Style::default().fg(colors.fg_primary)),
             ]))
         })
         .collect();
@@ -1135,8 +1162,9 @@ fn render_http_stream(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render statistics pane
 fn render_statistics(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
     let is_active = app.active_pane == ActivePane::Statistics;
-    let border_color = if is_active { BORDER_ACTIVE } else { BORDER_INACTIVE };
+    let border_color = if is_active { colors.border_active } else { colors.border_inactive };
 
     // Show flood indicator in title when active
     let title = if app.flood_mode {
@@ -1147,11 +1175,11 @@ fn render_statistics(frame: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .title(title)
-        .title_style(Style::default().fg(if app.flood_mode { WARNING } else if is_active { ACCENT } else { FG_PRIMARY }))
+        .title_style(Style::default().fg(if app.flood_mode { colors.warning } else if is_active { colors.accent } else { colors.fg_primary }))
         .borders(Borders::ALL)
         .border_type(if is_active { BorderType::Double } else { BorderType::Rounded })
         .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(BG_COLOR));
+        .style(Style::default().bg(colors.bg));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1166,67 +1194,67 @@ fn render_statistics(frame: &mut Frame, app: &App, area: Rect) {
 
     // Regular packet stats
     lines.push(Line::from(vec![
-        Span::styled("Sent     ", Style::default().fg(FG_SECONDARY)),
-        Span::styled(": ", Style::default().fg(FG_DIM)),
-        Span::styled(stats.packets_sent.to_string(), Style::default().fg(FG_PRIMARY)),
+        Span::styled("Sent     ", Style::default().fg(colors.fg_secondary)),
+        Span::styled(": ", Style::default().fg(colors.fg_dim)),
+        Span::styled(stats.packets_sent.to_string(), Style::default().fg(colors.fg_primary)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Received ", Style::default().fg(FG_SECONDARY)),
-        Span::styled(": ", Style::default().fg(FG_DIM)),
-        Span::styled(stats.packets_received.to_string(), Style::default().fg(SUCCESS)),
+        Span::styled("Received ", Style::default().fg(colors.fg_secondary)),
+        Span::styled(": ", Style::default().fg(colors.fg_dim)),
+        Span::styled(stats.packets_received.to_string(), Style::default().fg(colors.success)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("Failed   ", Style::default().fg(FG_SECONDARY)),
-        Span::styled(": ", Style::default().fg(FG_DIM)),
-        Span::styled(stats.packets_failed.to_string(), Style::default().fg(if stats.packets_failed > 0 { ERROR } else { FG_PRIMARY })),
+        Span::styled("Failed   ", Style::default().fg(colors.fg_secondary)),
+        Span::styled(": ", Style::default().fg(colors.fg_dim)),
+        Span::styled(stats.packets_failed.to_string(), Style::default().fg(if stats.packets_failed > 0 { colors.error } else { colors.fg_primary })),
     ]));
 
     // Flood mode stats
     if app.flood_mode {
         let (flood_count, flood_duration, flood_pps) = app.get_flood_stats();
         lines.push(Line::from(vec![
-            Span::styled("Flood    ", Style::default().fg(WARNING)),
-            Span::styled(": ", Style::default().fg(FG_DIM)),
-            Span::styled(format_count(flood_count), Style::default().fg(WARNING).add_modifier(Modifier::BOLD)),
-            Span::styled(" pkts", Style::default().fg(FG_DIM)),
+            Span::styled("Flood    ", Style::default().fg(colors.warning)),
+            Span::styled(": ", Style::default().fg(colors.fg_dim)),
+            Span::styled(format_count(flood_count), Style::default().fg(colors.warning).add_modifier(Modifier::BOLD)),
+            Span::styled(" pkts", Style::default().fg(colors.fg_dim)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Rate     ", Style::default().fg(WARNING)),
-            Span::styled(": ", Style::default().fg(FG_DIM)),
-            Span::styled(format!("{:.0}", flood_pps), Style::default().fg(ACCENT_BRIGHT).add_modifier(Modifier::BOLD)),
-            Span::styled(" pps  ", Style::default().fg(FG_DIM)),
-            Span::styled(format!("{:.1}s", flood_duration), Style::default().fg(FG_SECONDARY)),
+            Span::styled("Rate     ", Style::default().fg(colors.warning)),
+            Span::styled(": ", Style::default().fg(colors.fg_dim)),
+            Span::styled(format!("{:.0}", flood_pps), Style::default().fg(colors.accent_bright).add_modifier(Modifier::BOLD)),
+            Span::styled(" pps  ", Style::default().fg(colors.fg_dim)),
+            Span::styled(format!("{:.1}s", flood_duration), Style::default().fg(colors.fg_secondary)),
         ]));
     } else {
         // Show port stats when not flooding
         lines.push(Line::from(vec![
-            Span::styled("Open     ", Style::default().fg(FG_SECONDARY)),
-            Span::styled(": ", Style::default().fg(FG_DIM)),
-            Span::styled(stats.open_ports.to_string(), Style::default().fg(SUCCESS)),
+            Span::styled("Open     ", Style::default().fg(colors.fg_secondary)),
+            Span::styled(": ", Style::default().fg(colors.fg_dim)),
+            Span::styled(stats.open_ports.to_string(), Style::default().fg(colors.success)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Closed   ", Style::default().fg(FG_SECONDARY)),
-            Span::styled(": ", Style::default().fg(FG_DIM)),
-            Span::styled(stats.closed_ports.to_string(), Style::default().fg(WARNING)),
+            Span::styled("Closed   ", Style::default().fg(colors.fg_secondary)),
+            Span::styled(": ", Style::default().fg(colors.fg_dim)),
+            Span::styled(stats.closed_ports.to_string(), Style::default().fg(colors.warning)),
         ]));
     }
 
     // RTT stats
     lines.push(Line::from(vec![
-        Span::styled("Avg RTT  ", Style::default().fg(FG_SECONDARY)),
-        Span::styled(": ", Style::default().fg(FG_DIM)),
-        Span::styled(format!("{:.2} ms", stats.avg_rtt_ms), Style::default().fg(INFO)),
+        Span::styled("Avg RTT  ", Style::default().fg(colors.fg_secondary)),
+        Span::styled(": ", Style::default().fg(colors.fg_dim)),
+        Span::styled(format!("{:.2} ms", stats.avg_rtt_ms), Style::default().fg(colors.info)),
     ]));
 
     // Success rate as text (cleaner than progress bar)
     let total = stats.packets_sent.max(1) as f64;
     let success_rate = stats.packets_received as f64 / total;
-    let rate_color = if success_rate > 0.8 { SUCCESS } else if success_rate > 0.5 { WARNING } else { ERROR };
+    let rate_color = if success_rate > 0.8 { colors.success } else if success_rate > 0.5 { colors.warning } else { colors.error };
     let rate_pct = format!("{:3.0}%", success_rate * 100.0);
 
     lines.push(Line::from(vec![
-        Span::styled("Rate     ", Style::default().fg(FG_SECONDARY)),
-        Span::styled(": ", Style::default().fg(FG_DIM)),
+        Span::styled("Rate     ", Style::default().fg(colors.fg_secondary)),
+        Span::styled(": ", Style::default().fg(colors.fg_dim)),
         Span::styled(&rate_pct, Style::default().fg(rate_color).add_modifier(Modifier::BOLD)),
     ]));
 
@@ -1247,6 +1275,8 @@ fn format_count(n: u64) -> String {
 
 /// Render status bar
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let colors = app.current_theme.colors();
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -1258,22 +1288,27 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     // Status message or help hint
     let status_content = if let Some((msg, level)) = &app.status_message {
         let color = match level {
-            LogLevel::Info => INFO,
-            LogLevel::Success => SUCCESS,
-            LogLevel::Warning => WARNING,
-            LogLevel::Error => ERROR,
-            LogLevel::Debug => FG_SECONDARY,
+            LogLevel::Info => colors.info,
+            LogLevel::Success => colors.success,
+            LogLevel::Warning => colors.warning,
+            LogLevel::Error => colors.error,
+            LogLevel::Debug => colors.fg_secondary,
         };
         Line::from(vec![Span::styled(msg, Style::default().fg(color))])
     } else {
         Line::from(vec![
-            Span::styled("Press ", Style::default().fg(FG_DIM)),
-            Span::styled("?", Style::default().fg(ACCENT_BRIGHT).bold()),
-            Span::styled(" for help | ", Style::default().fg(FG_DIM)),
-            Span::styled("Tab", Style::default().fg(ACCENT_BRIGHT).bold()),
-            Span::styled(" to switch panes | ", Style::default().fg(FG_DIM)),
-            Span::styled("s", Style::default().fg(ACCENT_BRIGHT).bold()),
-            Span::styled(" to send", Style::default().fg(FG_DIM)),
+            Span::styled("?", Style::default().fg(colors.accent_bright).bold()),
+            Span::styled(" help ", Style::default().fg(colors.fg_dim)),
+            Span::styled("s", Style::default().fg(colors.accent_bright).bold()),
+            Span::styled(" send ", Style::default().fg(colors.fg_dim)),
+            Span::styled("e", Style::default().fg(colors.accent_bright).bold()),
+            Span::styled(" edit ", Style::default().fg(colors.fg_dim)),
+            Span::styled("t", Style::default().fg(colors.accent_bright).bold()),
+            Span::styled(" theme ", Style::default().fg(colors.fg_dim)),
+            Span::styled("T", Style::default().fg(colors.accent_bright).bold()),
+            Span::styled(" template ", Style::default().fg(colors.fg_dim)),
+            Span::styled("P", Style::default().fg(colors.accent_bright).bold()),
+            Span::styled(" protocol", Style::default().fg(colors.fg_dim)),
         ])
     };
 
@@ -1281,20 +1316,20 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(BORDER_INACTIVE))
-            .style(Style::default().bg(BG_COLOR)),
+            .border_style(Style::default().fg(colors.border_inactive))
+            .style(Style::default().bg(colors.bg)),
     );
     frame.render_widget(status, chunks[0]);
 
     // Current flags and pane info
     let flags_str = format_flags(&app.selected_flags);
     let info = Paragraph::new(Line::from(vec![
-        Span::styled("Flags: ", Style::default().fg(FG_DIM)),
-        Span::styled(&flags_str, Style::default().fg(ACCENT_BRIGHT).bold()),
-        Span::styled(" | ", Style::default().fg(FG_DIM)),
+        Span::styled("Flags: ", Style::default().fg(colors.fg_dim)),
+        Span::styled(&flags_str, Style::default().fg(colors.accent_bright).bold()),
+        Span::styled(" | ", Style::default().fg(colors.fg_dim)),
         Span::styled(
             format!("[{}]", app.active_pane.name()),
-            Style::default().fg(ACCENT),
+            Style::default().fg(colors.accent),
         ),
     ]))
     .alignment(Alignment::Right)
@@ -1302,14 +1337,15 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(BORDER_INACTIVE))
-            .style(Style::default().bg(BG_COLOR)),
+            .border_style(Style::default().fg(colors.border_inactive))
+            .style(Style::default().bg(colors.bg)),
     );
     frame.render_widget(info, chunks[1]);
 }
 
 /// Render command line at the bottom
 fn render_command_line(frame: &mut Frame, app: &App) {
+    let colors = app.current_theme.colors();
     let area = frame.area();
     let popup_area = Rect {
         x: 0,
@@ -1319,16 +1355,16 @@ fn render_command_line(frame: &mut Frame, app: &App) {
     };
 
     let command_line = Paragraph::new(Line::from(vec![
-        Span::styled(":", Style::default().fg(ACCENT_BRIGHT).bold()),
-        Span::styled(&app.command_buffer, Style::default().fg(FG_PRIMARY)),
-        Span::styled("█", Style::default().fg(ACCENT_BRIGHT)),
+        Span::styled(":", Style::default().fg(colors.accent_bright).bold()),
+        Span::styled(&app.command_buffer, Style::default().fg(colors.fg_primary)),
+        Span::styled("|", Style::default().fg(colors.accent_bright)),
     ]))
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .style(Style::default().bg(BG_COLOR)),
+            .border_style(Style::default().fg(colors.accent))
+            .style(Style::default().bg(colors.bg)),
     );
 
     frame.render_widget(Clear, popup_area);
@@ -1337,6 +1373,7 @@ fn render_command_line(frame: &mut Frame, app: &App) {
 
 /// Render search line
 fn render_search_line(frame: &mut Frame, app: &App) {
+    let colors = app.current_theme.colors();
     let area = frame.area();
     let popup_area = Rect {
         x: 0,
@@ -1346,16 +1383,16 @@ fn render_search_line(frame: &mut Frame, app: &App) {
     };
 
     let search_line = Paragraph::new(Line::from(vec![
-        Span::styled("/", Style::default().fg(ACCENT_BRIGHT).bold()),
-        Span::styled(&app.search_buffer, Style::default().fg(FG_PRIMARY)),
-        Span::styled("█", Style::default().fg(ACCENT_BRIGHT)),
+        Span::styled("/", Style::default().fg(colors.accent_bright).bold()),
+        Span::styled(&app.search_buffer, Style::default().fg(colors.fg_primary)),
+        Span::styled("|", Style::default().fg(colors.accent_bright)),
     ]))
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT))
-            .style(Style::default().bg(BG_COLOR)),
+            .border_style(Style::default().fg(colors.accent))
+            .style(Style::default().bg(colors.bg)),
     );
 
     frame.render_widget(Clear, popup_area);
